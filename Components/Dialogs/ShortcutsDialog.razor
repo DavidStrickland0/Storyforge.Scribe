@@ -1,0 +1,20 @@
+<Modal Title="Keyboard shortcuts" Eyebrow="Scribe" OnClose="OnClose" Class="modal-shortcuts">
+    <ChildContent>
+        <ul class="shortcut-list">
+            <li><span>Save now</span><kbd>Ctrl</kbd><kbd>S</kbd></li>
+            <li><span>Focus mode</span><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>F</kbd></li>
+            <li><span>Toggle AI muse</span><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>A</kbd></li>
+            <li><span>Previous beat</span><kbd>Alt</kbd><kbd>↑</kbd></li>
+            <li><span>Next beat</span><kbd>Alt</kbd><kbd>↓</kbd></li>
+            <li><span>Close dialog or menu</span><kbd>Esc</kbd></li>
+        </ul>
+        <p class="note">Everything saves itself about a second after you stop typing. Backups are taken every 15 minutes when the manuscript has changed.</p>
+    </ChildContent>
+    <Footer>
+        <button type="button" class="btn primary" @onclick="() => OnClose.InvokeAsync()">Got it</button>
+    </Footer>
+</Modal>
+
+@code {
+    [Parameter] public EventCallback OnClose { get; set; }
+}

@@ -1,0 +1,74 @@
+@using StoryForge.Scribe.Components.Dialogs
+
+<Modal Title="@Title" Eyebrow="@Eyebrow" Subtitle="Changes are saved with the book." OnClose="OnCancel">
+    <ChildContent>
+        <div class="form-grid">
+            <label class="field span-2">
+                <span>Title</span>
+                <input @bind="_title" @bind:event="oninput" @onkeydown="TitleKeyDown" placeholder="Untitled" />
+            </label>
+            <label class="field span-2">
+                <span>Summary</span>
+                <textarea rows="3" @bind="_summary" @bind:event="oninput"
+                          placeholder="The job this chapter or scene does for the story."></textarea>
+            </label>
+            @if (Request.Kind == EntityKind.Scene)
+            {
+                <label class="field">
+                    <span>Point of view</span>
+                    <input @bind="_pov" @bind:event="oninput" placeholder="Whose eyes?" />
+                </label>
+                <label class="field">
+                    <span>Setting</span>
+                    <input @bind="_setting" @bind:event="oninput" placeholder="Where and when?" />
+                </label>
+            }
+        </div>
+    </ChildContent>
+    <Footer>
+        <button type="button" class="btn ghost" @onclick="() => OnCancel.InvokeAsync()">Cancel</button>
+        <button type="button" class="btn primary" @onclick="SaveAsync">Save</button>
+    </Footer>
+</Modal>
+
+@code {
+    [Parameter] public EntityEditorRequest Request { get; set; } = null!;
+    [Parameter] public EventCallback OnCancel { get; set; }
+    [Parameter] public EventCallback<EntityDraft> OnSave { get; set; }
+
+    private string _title = "";
+    private string _summary = "";
+    private string _pov = "";
+    private string _setting = "";
+
+    private string Title => Request.Kind == EntityKind.Chapter ? "Chapter details" : "Scene details";
+    private string Eyebrow => Request.Kind == EntityKind.Chapter ? "Chapter" : "Scene";
+
+    protected override void OnParametersSet()
+    {
+        _title = Request.Title;
+        _summary = Request.Summary;
+        _pov = Request.Pov;
+        _setting = Request.Setting;
+    }
+
+    private async Task TitleKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter")
+        {
+            await SaveAsync();
+        }
+    }
+
+    private Task SaveAsync()
+    {
+        var fallback = Request.Kind == EntityKind.Chapter ? "Untitled chapter" : "Untitled scene";
+        var draft = new EntityDraft(
+            string.IsNullOrWhiteSpace(_title) ? fallback : _title.Trim(),
+            _summary?.Trim() ?? "",
+            _pov?.Trim() ?? "",
+            _setting?.Trim() ?? "");
+
+        return OnSave.InvokeAsync(draft);
+    }
+}

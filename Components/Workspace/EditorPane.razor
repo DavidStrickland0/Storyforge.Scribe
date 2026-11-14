@@ -1,0 +1,350 @@
+@using StoryForge.Scribe.Components.Dialogs
+@using StoryForge.Scribe.Domain
+@inject IJSRuntime JS
+
+<div class="editor-column-inner">
+    @if (Beat is null)
+    {
+        <div class="editor-empty">
+            <div class="empty-mark"><Icon Name="quill" Size="28" /></div>
+            <h1>Every book starts with a beat.</h1>
+            <p>A beat is one small unit of story — a moment, a turn, a discovery. Write it here. It can stay loose, gather into a scene, and the scene can join a chapter later.</p>
+            <button type="button" class="btn primary" @onclick="() => OnCreateFirst.InvokeAsync()">
+                <Icon Name="plus" Size="15" /> Write the first beat
+            </button>
+        </div>
+    }
+    else
+    {
+        <div class="editor-scroll" @ref="_scroll">
+            <div class="editor-inner">
+                <div class="editor-topline">
+                    <div class="crumbs" aria-label="Location in manuscript">
+                        @if (Chapter is not null)
+                        {
+                            <span class="crumb-kicker">Chapter @(ChapterIndex + 1)</span>
+                            <span class="crumb-sep">/</span>
+                            <span>@TitleOr(Scene?.Title, "Untitled scene")</span>
+                            <span class="crumb-sep">/</span>
+                            <span class="crumb-current">Beat @(BeatIndex + 1)</span>
+                        }
+                        else if (Scene is not null)
+                        {
+                            <span class="crumb-kicker">Unassigned scene</span>
+                            <span class="crumb-sep">/</span>
+                            <span>@TitleOr(Scene.Title, "Untitled scene")</span>
+                            <span class="crumb-sep">/</span>
+                            <span class="crumb-current">Beat @(BeatIndex + 1)</span>
+                        }
+                        else
+                        {
+                            <span class="crumb-kicker">Unassigned beat</span>
+                            <span class="crumb-sep">/</span>
+                            <span class="crumb-current">Beat @(BeatIndex + 1)</span>
+                        }
+                    </div>
+                    <div class="editor-nav">
+                        <button type="button" class="icon-btn" title="Previous beat (Alt+↑)" aria-label="Previous beat"
+                                disabled="@(!HasPrevious)" @onclick="() => OnNavigate.InvokeAsync(-1)">
+                            <Icon Name="chevron-left" />
+                        </button>
+                        <button type="button" class="icon-btn" title="Next beat (Alt+↓)" aria-label="Next beat"
+                                disabled="@(!HasNext)" @onclick="() => OnNavigate.InvokeAsync(1)">
+                            <Icon Name="chevron-right" />
+                        </button>
+                    </div>
+                </div>
+
+                <article class="paper" @key="Beat.Id">
+                    <div class="paper-head">
+                        <input id="@($"beat-title-{Beat.Id:N}")" @ref="_title" class="beat-title"
+                               value="@Beat.Title" @oninput="OnTitleInput" @onkeydown="OnTitleKeyDown"
+                               placeholder="Untitled beat" aria-label="Beat title" autocomplete="off" />
+
+                        <div class="beat-meta">
+                            <label class="status-select status-@Beat.Status.ToString().ToLowerInvariant()" title="Beat status">
+                                <span class="status-dot"></span>
+                                <select value="@Beat.Status" @onchange="OnStatusChange" aria-label="Beat status">
+                                    @foreach (var status in Enum.GetValues<BeatStatus>())
+                                    {
+                                        <option value="@status">@status</option>
+                                    }
+                                </select>
+                            </label>
+
+                            <input class="meta-input" value="@Beat.Pov" @oninput="OnPovInput"
+                                   placeholder="POV" aria-label="Point of view" />
+
+                            <button type="button" class="ghost-chip @(_briefOpen ? "is-on" : "")"
+                                    @onclick="ToggleBrief" title="Show or hide the beat brief"
+                                    aria-expanded="@_briefOpen">
+                                <Icon Name="list" Size="14" />
+                                Brief
+                                @if (!string.IsNullOrWhiteSpace(Beat.Brief))
+                                {
+                                    <span class="chip-dot"></span>
+                                }
+                            </button>
+
+                            <span class="meta-spacer"></span>
+
+                            <span class="word-pill" title="@WordCount.ToString("N0") words">
+                                @WordCount.ToString("N0") words
+                                @if (WordCount > 0)
+                                {
+                                    <span class="word-pill-muted">· @ReadingMinutes min</span>
+                                }
+                            </span>
+                        </div>
+                    </div>
+
+                    @if (_briefOpen)
+                    {
+                        <div class="brief-box">
+                            <label class="eyebrow" for="@($"beat-brief-{Beat.Id:N}")">Beat brief</label>
+                            <textarea id="@($"beat-brief-{Beat.Id:N}")" @ref="_brief" class="brief-input autosize"
+                                      rows="2" value="@Beat.Brief" @oninput="OnBriefInput"
+                                      placeholder="What needs to happen in this beat? This is planning space — the AI muse reads it."></textarea>
+                        </div>
+                    }
+
+                    <div class="paper-rule"></div>
+
+                    <textarea id="@($"beat-prose-{Beat.Id:N}")" @ref="_prose" class="prose"
+                              value="@Beat.Content" @oninput="OnContentInput"
+                              placeholder="Begin writing…" spellcheck="true"
+                              aria-label="Beat prose"></textarea>
+                </article>
+
+                <footer class="editor-footer">
+                    <div class="editor-stats">
+                        <span>@WordCount.ToString("N0") words</span>
+                        <span class="dot-sep">·</span>
+                        <span>@ReadingMinutes min read</span>
+                        <span class="dot-sep">·</span>
+                        <span class="autosave-hint">Autosaves as you write</span>
+                    </div>
+                    <div class="editor-next">
+                        <button type="button" class="text-btn" disabled="@(!HasPrevious)" @onclick="() => OnNavigate.InvokeAsync(-1)">
+                            <Icon Name="arrow-left" Size="14" /> Previous
+                        </button>
+                        <button type="button" class="text-btn" disabled="@(!HasNext)" @onclick="() => OnNavigate.InvokeAsync(1)">
+                            Next <Icon Name="arrow-right" Size="14" />
+                        </button>
+                    </div>
+                </footer>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public Beat? Beat { get; set; }
+    [Parameter] public Scene? Scene { get; set; }
+    [Parameter] public Chapter? Chapter { get; set; }
+    [Parameter] public int ChapterIndex { get; set; }
+    [Parameter] public int SceneIndex { get; set; }
+    [Parameter] public int BeatIndex { get; set; }
+    [Parameter] public bool HasPrevious { get; set; }
+    [Parameter] public bool HasNext { get; set; }
+    [Parameter] public EventCallback OnDirty { get; set; }
+    [Parameter] public EventCallback<int> OnNavigate { get; set; }
+    [Parameter] public EventCallback OnCreateFirst { get; set; }
+
+    private ElementReference _scroll;
+    private ElementReference _title;
+    private ElementReference _prose;
+    private ElementReference _brief;
+    private bool _briefOpen;
+    private bool _pendingBeatChange;
+    private bool _focusTitle;
+    private Guid? _renderedBeatId;
+    private Guid? _boundProseBeat;
+    private Guid? _boundBriefBeat;
+    private bool _boundBriefOpen;
+    private string _knownContent = "";
+
+    private int WordCount => Beat is null ? 0 : WritingStats.CountWords(Beat.Content);
+    private int ReadingMinutes => WritingStats.ReadingMinutes(WordCount);
+
+    protected override void OnParametersSet()
+    {
+        if (Beat is null)
+        {
+            return;
+        }
+
+        if (_renderedBeatId != Beat.Id)
+        {
+            _renderedBeatId = Beat.Id;
+            _knownContent = Beat.Content;
+            _pendingBeatChange = true;
+            _briefOpen = !string.IsNullOrWhiteSpace(Beat.Brief);
+            _focusTitle = string.IsNullOrWhiteSpace(Beat.Title);
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Beat is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (_boundProseBeat != Beat.Id && _prose.Context is not null)
+            {
+                await JS.InvokeVoidAsync("scribe.bindAutosize", _prose);
+                _boundProseBeat = Beat.Id;
+            }
+
+            if (_briefOpen && _brief.Context is not null && (_boundBriefBeat != Beat.Id || !_boundBriefOpen))
+            {
+                await JS.InvokeVoidAsync("scribe.bindAutosize", _brief);
+                _boundBriefBeat = Beat.Id;
+                _boundBriefOpen = true;
+            }
+            else if (!_briefOpen)
+            {
+                _boundBriefBeat = null;
+                _boundBriefOpen = false;
+            }
+
+            if (_pendingBeatChange)
+            {
+                _pendingBeatChange = false;
+
+                if (_scroll.Context is not null)
+                {
+                    await JS.InvokeVoidAsync("scribe.scrollTop", _scroll);
+                }
+
+                if (_focusTitle)
+                {
+                    await JS.InvokeVoidAsync("scribe.focusById", $"beat-title-{Beat.Id:N}");
+                }
+            }
+            else if (_knownContent != Beat.Content)
+            {
+                // Content changed programmatically (for example, an AI insertion).
+                _knownContent = Beat.Content;
+                if (_prose.Context is not null)
+                {
+                    await JS.InvokeVoidAsync("scribe.autosize", _prose);
+                }
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    /// <summary>Whatever is selected in the prose editor, or null.</summary>
+    public async Task<string?> GetSelectionAsync()
+    {
+        if (_prose.Context is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var selection = await JS.InvokeAsync<TextSelection?>("scribe.getSelection", _prose);
+            return string.IsNullOrWhiteSpace(selection?.Text) ? null : selection.Text;
+        }
+        catch (JSDisconnectedException)
+        {
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private async Task OnTitleInput(ChangeEventArgs args)
+    {
+        if (Beat is null)
+        {
+            return;
+        }
+
+        Beat.Title = args.Value?.ToString() ?? "";
+        Beat.UpdatedUtc = DateTime.UtcNow;
+        await OnDirty.InvokeAsync();
+    }
+
+    private async Task OnTitleKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter" && Beat is not null)
+        {
+            await JS.InvokeVoidAsync("scribe.focusById", $"beat-prose-{Beat.Id:N}");
+        }
+    }
+
+    private async Task OnPovInput(ChangeEventArgs args)
+    {
+        if (Beat is null)
+        {
+            return;
+        }
+
+        Beat.Pov = args.Value?.ToString() ?? "";
+        Beat.UpdatedUtc = DateTime.UtcNow;
+        await OnDirty.InvokeAsync();
+    }
+
+    private async Task OnStatusChange(ChangeEventArgs args)
+    {
+        if (Beat is null || !Enum.TryParse<BeatStatus>(args.Value?.ToString(), out var status))
+        {
+            return;
+        }
+
+        Beat.Status = status;
+        Beat.UpdatedUtc = DateTime.UtcNow;
+        await OnDirty.InvokeAsync();
+    }
+
+    private async Task OnBriefInput(ChangeEventArgs args)
+    {
+        if (Beat is null)
+        {
+            return;
+        }
+
+        Beat.Brief = args.Value?.ToString() ?? "";
+        Beat.UpdatedUtc = DateTime.UtcNow;
+        await OnDirty.InvokeAsync();
+    }
+
+    private async Task OnContentInput(ChangeEventArgs args)
+    {
+        if (Beat is null)
+        {
+            return;
+        }
+
+        var text = args.Value?.ToString() ?? "";
+        Beat.Content = text;
+        Beat.UpdatedUtc = DateTime.UtcNow;
+        _knownContent = text;
+
+        // A beat stops being an outline the moment prose appears in it.
+        if (Beat.Status == BeatStatus.Outline && !string.IsNullOrWhiteSpace(text))
+        {
+            Beat.Status = BeatStatus.Draft;
+        }
+
+        await OnDirty.InvokeAsync();
+    }
+
+    private void ToggleBrief() => _briefOpen = !_briefOpen;
+
+    private static string TitleOr(string? value, string fallback) =>
+        string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+}

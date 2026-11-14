@@ -1,0 +1,273 @@
+@using StoryForge.Scribe.Components.Dialogs
+@using StoryForge.Scribe.Services
+@using StoryForge.Scribe.Services.Ai
+@inject IJSRuntime JS
+@inject ToastService Toasts
+
+<aside class="ai-panel" aria-label="AI muse">
+    <div class="panel-head ai-head">
+        <div class="ai-heading">
+            <p class="eyebrow">
+                AI muse
+                <span class="mode-badge" title="Current model">@ModeLabel</span>
+            </p>
+            <p class="ai-context">
+                @if (HasBeat)
+                {
+                    <span>In @SceneTitle</span>
+                }
+                else
+                {
+                    <span>Select a beat to begin</span>
+                }
+            </p>
+        </div>
+        <div class="panel-actions">
+            <button type="button" class="icon-btn" title="AI settings" @onclick="() => OnOpenSettings.InvokeAsync()">
+                <Icon Name="settings" />
+            </button>
+            <button type="button" class="icon-btn" title="Close the muse" @onclick="() => OnClose.InvokeAsync()">
+                <Icon Name="close" />
+            </button>
+        </div>
+    </div>
+
+    <div class="ai-body">
+        @if (IsOffline)
+        {
+            <div class="ai-banner">
+                <Icon Name="info" Size="15" />
+                <div>
+                    <strong>Offline muse.</strong>
+                    <span>No model is connected, so you get craft guidance instead of prose.</span>
+                    <button type="button" class="text-btn" @onclick="() => OnOpenSettings.InvokeAsync()">Connect a model</button>
+                </div>
+            </div>
+        }
+
+        <div class="ai-actions">
+            @foreach (var option in Actions)
+            {
+                <button type="button" class="ai-chip" disabled="@(!HasBeat || Busy)"
+                        title="@option.Hint" @onclick="() => Run(option.Action)">
+                    <Icon Name="@option.Icon" Size="14" />
+                    <span>@option.Label</span>
+                </button>
+            }
+        </div>
+
+        <div class="ai-ask">
+            <textarea rows="3" disabled="@(!HasBeat || Busy)" @bind="_instruction" @bind:event="oninput"
+                      placeholder="Ask your muse… Make the confrontation quieter and more dangerous."></textarea>
+            <div class="ai-ask-foot">
+                <span>Uses the current beat as context</span>
+                <button type="button" class="btn primary small" disabled="@(!HasBeat || Busy || string.IsNullOrWhiteSpace(_instruction))"
+                        @onclick="AskAsync">
+                    <Icon Name="send" Size="14" /> Ask
+                </button>
+            </div>
+        </div>
+
+        @if (HasResult)
+        {
+            <div class="ai-output-card @(Busy ? "is-busy" : "")">
+                <div class="ai-output-head">
+                    <span>@LabelFor(CompletedAction)</span>
+                    @if (Busy)
+                    {
+                        <span class="thinking"><span></span><span></span><span></span></span>
+                        <button type="button" class="text-btn stop-btn" @onclick="() => OnStop.InvokeAsync()">
+                            <Icon Name="stop" Size="12" /> Stop
+                        </button>
+                    }
+                </div>
+
+                @if (!string.IsNullOrEmpty(Output) || Busy)
+                {
+                    <div class="ai-output" @ref="_outputRef">@Output@if (Busy)
+                        {
+                            <span class="stream-caret"></span>
+                        }</div>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(Error))
+                {
+                    <div class="ai-error">
+                        <Icon Name="alert" Size="15" />
+                        <span>@Error</span>
+                    </div>
+                }
+
+                @if (!Busy && !string.IsNullOrWhiteSpace(Output))
+                {
+                    <div class="ai-output-actions">
+                        @if (CompletedAction == AiAction.BrainstormBeats)
+                        {
+                            <button type="button" class="btn primary small" @onclick="() => OnAddBeats.InvokeAsync()">
+                                <Icon Name="plus" Size="14" /> Add as beats
+                            </button>
+                        }
+                        else if (CompletedAction == AiAction.CritiqueScene)
+                        {
+                            <span class="ai-note">Notes stay here — copy what is useful.</span>
+                        }
+                        else if (CompletedAction == AiAction.TightenProse)
+                        {
+                            <button type="button" class="btn primary small" @onclick="() => OnReplace.InvokeAsync()">
+                                <Icon Name="check" Size="14" /> Replace
+                            </button>
+                        }
+                        else
+                        {
+                            <button type="button" class="btn primary small" @onclick="() => OnAppend.InvokeAsync()">
+                                <Icon Name="plus" Size="14" /> Add to beat
+                            </button>
+                            <button type="button" class="btn ghost small" @onclick="() => OnReplace.InvokeAsync()">
+                                Replace
+                            </button>
+                        }
+
+                        <button type="button" class="icon-btn small" title="Copy to clipboard" @onclick="CopyAsync">
+                            <Icon Name="copy" Size="15" />
+                        </button>
+
+                        @if (CanUndo)
+                        {
+                            <button type="button" class="text-btn undo-btn" @onclick="() => OnUndo.InvokeAsync()">
+                                <Icon Name="undo" Size="13" /> Undo last edit
+                            </button>
+                        }
+                    </div>
+                }
+            </div>
+        }
+
+        <p class="ai-tip">
+            @if (IsOffline)
+            {
+                <span>Tip: add an OpenAI-compatible key or point Scribe at Ollama for prose in your own voice.</span>
+            }
+            else
+            {
+                <span>Try selecting a passage first, then ask for a tighter version of just those lines.</span>
+            }
+        </p>
+    </div>
+
+    <div class="ai-foot">
+        <Icon Name="quill" Size="13" />
+        <span>The muse suggests. The author decides.</span>
+    </div>
+</aside>
+
+@code {
+    [Parameter] public bool HasBeat { get; set; }
+    [Parameter] public string SceneTitle { get; set; } = "";
+    [Parameter] public string ModeLabel { get; set; } = "Offline muse";
+    [Parameter] public bool IsOffline { get; set; } = true;
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public string Output { get; set; } = "";
+    [Parameter] public string? Error { get; set; }
+    [Parameter] public AiAction? CompletedAction { get; set; }
+    [Parameter] public bool CanUndo { get; set; }
+    [Parameter] public EventCallback<AiRunRequest> OnRun { get; set; }
+    [Parameter] public EventCallback OnStop { get; set; }
+    [Parameter] public EventCallback OnAppend { get; set; }
+    [Parameter] public EventCallback OnReplace { get; set; }
+    [Parameter] public EventCallback OnAddBeats { get; set; }
+    [Parameter] public EventCallback OnUndo { get; set; }
+    [Parameter] public EventCallback OnOpenSettings { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private string _instruction = "";
+    private ElementReference _outputRef;
+    private int _lastRenderedLength = -1;
+
+    private static readonly ActionOption[] Actions =
+    [
+        new(AiAction.Continue, "Continue", "Write the next few paragraphs", "sparkle"),
+        new(AiAction.DraftBeat, "Draft beat", "Turn the brief into a full draft", "quill"),
+        new(AiAction.BrainstormBeats, "Brainstorm", "Propose new beats for this scene", "list"),
+        new(AiAction.TightenProse, "Tighten", "Line-edit the selection or the whole beat", "compress"),
+        new(AiAction.DescribeSetting, "Setting", "A sensory description of the place", "book"),
+        new(AiAction.CritiqueScene, "Critique", "Notes on pacing, stakes, and voice", "search")
+    ];
+
+    private bool HasResult => Busy || !string.IsNullOrWhiteSpace(Output) || !string.IsNullOrWhiteSpace(Error);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        var length = Output?.Length ?? 0;
+        if (length == _lastRenderedLength)
+        {
+            return;
+        }
+
+        _lastRenderedLength = length;
+
+        try
+        {
+            await JS.InvokeVoidAsync("scribe.scrollBottom", _outputRef);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private Task Run(AiAction action)
+    {
+        if (Busy || !HasBeat)
+        {
+            return Task.CompletedTask;
+        }
+
+        return OnRun.InvokeAsync(new AiRunRequest(action));
+    }
+
+    private async Task AskAsync()
+    {
+        if (Busy || !HasBeat || string.IsNullOrWhiteSpace(_instruction))
+        {
+            return;
+        }
+
+        var instruction = _instruction.Trim();
+        _instruction = "";
+        await OnRun.InvokeAsync(new AiRunRequest(AiAction.Freeform, instruction));
+    }
+
+    private async Task CopyAsync()
+    {
+        if (string.IsNullOrWhiteSpace(Output))
+        {
+            return;
+        }
+
+        try
+        {
+            var copied = await JS.InvokeAsync<bool>("scribe.copy", Output);
+            Toasts.Show(copied ? "Copied to the clipboard." : "Could not copy automatically. Select the text and copy it.",
+                copied ? ToastKind.Success : ToastKind.Warning);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    private static string LabelFor(AiAction? action) => action switch
+    {
+        AiAction.Continue => "Continued scene",
+        AiAction.DraftBeat => "Beat draft",
+        AiAction.BrainstormBeats => "Beat ideas",
+        AiAction.TightenProse => "Line edit",
+        AiAction.DescribeSetting => "Setting",
+        AiAction.CritiqueScene => "Critique",
+        AiAction.Freeform => "Muse",
+        _ => "Muse"
+    };
+
+    private sealed record ActionOption(AiAction Action, string Label, string Hint, string Icon);
+}

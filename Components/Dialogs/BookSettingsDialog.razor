@@ -1,0 +1,59 @@
+@using StoryForge.Scribe.Components.Dialogs
+
+<Modal Title="Book details" Eyebrow="Manuscript" OnClose="OnCancel">
+    <ChildContent>
+        <div class="form-grid">
+            <label class="field span-2">
+                <span>Title</span>
+                <input @bind="_title" @bind:event="oninput" placeholder="Untitled Book" />
+            </label>
+            <label class="field">
+                <span>Author</span>
+                <input @bind="_author" @bind:event="oninput" placeholder="Your name" />
+            </label>
+            <label class="field">
+                <span>Subtitle</span>
+                <input @bind="_subtitle" @bind:event="oninput" placeholder="Optional" />
+            </label>
+            <label class="field">
+                <span>Word goal</span>
+                <input type="number" min="0" max="10000000" step="1000" @bind="_wordGoal" />
+                <small>Used for the progress line at the top of the window.</small>
+            </label>
+        </div>
+    </ChildContent>
+    <Footer>
+        <button type="button" class="btn ghost" @onclick="() => OnCancel.InvokeAsync()">Cancel</button>
+        <button type="button" class="btn primary" @onclick="SaveAsync">Save details</button>
+    </Footer>
+</Modal>
+
+@code {
+    [Parameter] public Book Book { get; set; } = new();
+    [Parameter] public EventCallback OnCancel { get; set; }
+    [Parameter] public EventCallback<BookDraft> OnSave { get; set; }
+
+    private string _title = "";
+    private string _author = "";
+    private string _subtitle = "";
+    private int _wordGoal;
+
+    protected override void OnParametersSet()
+    {
+        _title = Book.Title;
+        _author = Book.Author;
+        _subtitle = Book.Subtitle;
+        _wordGoal = Book.WordGoal;
+    }
+
+    private async Task SaveAsync()
+    {
+        var draft = new BookDraft(
+            string.IsNullOrWhiteSpace(_title) ? "Untitled Book" : _title.Trim(),
+            _subtitle?.Trim() ?? "",
+            _author?.Trim() ?? "",
+            Math.Clamp(_wordGoal, 0, 10_000_000));
+
+        await OnSave.InvokeAsync(draft);
+    }
+}

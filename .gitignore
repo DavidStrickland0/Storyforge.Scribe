@@ -1,0 +1,17 @@
+# Build output
+bin/
+obj/
+
+# Local manuscript and backups — your writing, not source
+App_Data/
+
+# IDE and user settings
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Logs and OS noise
+*.log
+Thumbs.db
+.DS_Store

@@ -1,0 +1,46 @@
+@using StoryForge.Scribe.Components.Dialogs
+
+<Modal Title="@Title" Eyebrow="@Eyebrow" Subtitle="@Subtitle" OnClose="OnCancel">
+    <ChildContent>
+        <div class="move-list">
+            @if (AllowUnassigned)
+            {
+                <button type="button" class="move-option @(CurrentId is null ? "is-current" : "")"
+                        @onclick="() => ChooseAsync(null)">
+                    <span class="move-option-title">@UnassignedLabel</span>
+                    <span class="move-option-note">@UnassignedNote</span>
+                </button>
+            }
+
+            @foreach (var option in Options)
+            {
+                <button type="button" class="move-option @(CurrentId == option.Id ? "is-current" : "")"
+                        @onclick="() => ChooseAsync(option.Id)">
+                    <span class="move-option-title">@option.Label</span>
+                    @if (!string.IsNullOrWhiteSpace(option.Note))
+                    {
+                        <span class="move-option-note">@option.Note</span>
+                    }
+                </button>
+            }
+        </div>
+    </ChildContent>
+    <Footer>
+        <button type="button" class="btn ghost" @onclick="() => OnCancel.InvokeAsync()">Cancel</button>
+    </Footer>
+</Modal>
+
+@code {
+    [Parameter] public string Title { get; set; } = "Move";
+    [Parameter] public string? Eyebrow { get; set; }
+    [Parameter] public string? Subtitle { get; set; }
+    [Parameter] public bool AllowUnassigned { get; set; }
+    [Parameter] public string UnassignedLabel { get; set; } = "Unassigned";
+    [Parameter] public string UnassignedNote { get; set; } = "";
+    [Parameter] public Guid? CurrentId { get; set; }
+    [Parameter] public IReadOnlyList<MoveOption> Options { get; set; } = [];
+    [Parameter] public EventCallback<Guid?> OnPick { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    private Task ChooseAsync(Guid? id) => OnPick.InvokeAsync(id);
+}

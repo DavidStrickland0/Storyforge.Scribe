@@ -1,0 +1,1556 @@
+@page "/"
+@implements IAsyncDisposable
+@using System.Text
+@using System.Text.RegularExpressions
+@using StoryForge.Scribe.Components.Dialogs
+@using StoryForge.Scribe.Components.Shared
+@using StoryForge.Scribe.Components.Workspace
+@using StoryForge.Scribe.Domain
+@using StoryForge.Scribe.Services
+@using StoryForge.Scribe.Services.Ai
+
+@inject BookStore Store
+@inject AiAssistant Ai
+@inject AiSettingsStore AiSettings
+@inject ToastService Toasts
+@inject IJSRuntime JS
+
+<PageTitle>Scribe — a quiet place to write</PageTitle>
+
+<div class="app">
+    <header class="topbar">
+        <button type="button" class="brand" @onclick="OpenBookSettings" title="Book details">
+            <span class="brand-mark"><Icon Name="quill" Size="17" /></span>
+            <span class="brand-text">Scribe</span>
+        </button>
+
+        <span class="topbar-divider" aria-hidden="true"></span>
+
+        <button type="button" class="book-title-btn" @onclick="OpenBookSettings" title="Edit book details">
+            <Icon Name="book" Size="15" />
+            <span class="book-title">@_book.Title</span>
+            @if (!string.IsNullOrWhiteSpace(_book.Author))
+            {
+                <span class="book-author">@_book.Author</span>
+            }
+        </button>
+
+        <div class="topbar-spacer"></div>
+
+        <button type="button" class="icon-btn topbar-outline" title="Toggle the manuscript outline"
+                aria-label="Toggle outline" @onclick="ToggleOutline">
+            <Icon Name="panel-left" />
+        </button>
+
+        <div class="save-state @SaveClass" title="@SaveTitle">
+            <span class="save-dot" aria-hidden="true"></span>
+            <span>@SaveLabel</span>
+        </div>
+
+        <button type="button" class="word-count topbar-words" @onclick="OpenBookSettings"
+                title="@WordCount.ToString("N0") of @_book.WordGoal.ToString("N0") words — edit goal">
+            <strong>@WordCount.ToString("N0")</strong>
+            <span>words</span>
+        </button>
+
+        <button type="button" class="icon-btn topbar-save" title="Save now (Ctrl+S)" aria-label="Save now"
+                disabled="@(!Store.IsDirty && _saveState != SaveState.Error)" @onclick="SaveNow">
+            <Icon Name="save" />
+        </button>
+
+        <button type="button" class="icon-btn @(_aiOpen ? "is-active" : "")" title="AI muse (Ctrl+Alt+A)"
+                aria-label="Toggle AI muse" @onclick="ToggleAi">
+            <Icon Name="sparkle" />
+        </button>
+
+        <button type="button" class="icon-btn topbar-focus @(_focusMode ? "is-active" : "")" title="Focus mode (Ctrl+Alt+F)"
+                aria-label="Toggle focus mode" @onclick="ToggleFocusMode">
+            <Icon Name="@(_focusMode ? "compress" : "expand")" />
+        </button>
+
+        <details class="menu">
+            <summary class="icon-btn" title="Menu" aria-label="Menu">
+                <Icon Name="menu" />
+            </summary>
+            <div class="menu-pop" @onclick="CloseMenusAsync">
+                <button type="button" @onclick="OpenBookSettings">
+                    <Icon Name="book" Size="15" /> Book details
+                </button>
+                <button type="button" @onclick="OpenAiSettings">
+                    <Icon Name="sparkle" Size="15" /> AI settings
+                </button>
+                <div class="menu-sep"></div>
+                <button type="button" @onclick="BackupNowAsync">
+                    <Icon Name="clock" Size="15" /> Back up now
+                </button>
+                <button type="button" @onclick="OpenBackups">
+                    <Icon Name="restore" Size="15" /> Backups &amp; restore
+                </button>
+                <a href="export/manuscript.md" download>
+                    <Icon Name="download" Size="15" /> Export manuscript (.md)
+                </a>
+                <a href="export/book.json" download>
+                    <Icon Name="file" Size="15" /> Export full book (.json)
+                </a>
+                <div class="menu-sep"></div>
+                <button type="button" @onclick="OpenShortcuts">
+                    <Icon Name="key" Size="15" /> Keyboard shortcuts
+                </button>
+                <button type="button" class="danger" @onclick="RequestNewBook">
+                    <Icon Name="refresh" Size="15" /> New book…
+                </button>
+            </div>
+        </details>
+
+        <div class="goal-line" aria-hidden="true"><span style="width:@GoalPercent.ToString("0.#")%"></span></div>
+    </header>
+
+    <div class="workspace @WorkspaceClasses">
+        <BookOutline Book="_book" SelectedBeatId="_selectedBeatId"
+                     OnAction="HandleOutlineActionAsync" OnOpenBackups="OpenBackups" />
+
+        <main class="editor-column">
+            <EditorPane @ref="_editor"
+                        Beat="_location?.Beat"
+                        Scene="_location?.Scene"
+                        Chapter="_location?.Chapter"
+                        ChapterIndex="_location?.ChapterIndex ?? -1"
+                        SceneIndex="_location?.SceneIndex ?? -1"
+                        BeatIndex="_location?.BeatIndex ?? -1"
+                        HasPrevious="HasPrevious"
+                        HasNext="HasNext"
+                        OnDirty="MarkDirty"
+                        OnNavigate="NavigateBeatAsync"
+                        OnCreateFirst="CreateFirstBeatAsync" />
+        </main>
+
+        <AiPanel HasBeat="_location is not null"
+                 SceneTitle="@(_location?.Scene is { } scene ? (string.IsNullOrWhiteSpace(scene.Title) ? "an untitled scene" : scene.Title.Trim()) : "an unassigned beat")"
+                 ModeLabel="@Ai.ModeLabel"
+                 IsOffline="@Ai.IsOffline"
+                 Busy="_aiBusy"
+                 Output="@_aiText"
+                 Error="@_aiError"
+                 CompletedAction="_aiAction"
+                 CanUndo="@(_undoContent is not null)"
+                 OnRun="RunAiAsync"
+                 OnStop="StopAi"
+                 OnAppend="AppendAiAsync"
+                 OnReplace="ReplaceAiAsync"
+                 OnAddBeats="AddAiBeatsAsync"
+                 OnUndo="UndoAiAsync"
+                 OnOpenSettings="OpenAiSettings"
+                 OnClose="ToggleAi" />
+
+        <div class="panel-scrim scrim-outline" @onclick="CloseOutlineOnSmallScreen"></div>
+        <div class="panel-scrim scrim-ai" @onclick="CloseAiOnSmallScreen"></div>
+    </div>
+</div>
+
+<ToastHost />
+
+@if (_dialog == DialogKind.Book)
+{
+    <BookSettingsDialog Book="_book" OnCancel="CloseDialog" OnSave="SaveBookAsync" />
+}
+else if (_dialog == DialogKind.Ai)
+{
+    <AiSettingsDialog OnClose="CloseDialog" />
+}
+else if (_dialog == DialogKind.Backups)
+{
+    <BackupsDialog OnClose="CloseDialog" />
+}
+else if (_dialog == DialogKind.Shortcuts)
+{
+    <ShortcutsDialog OnClose="CloseDialog" />
+}
+
+@if (_entityDialog is not null)
+{
+    <EntityEditorDialog Request="_entityDialog" OnCancel="CloseEntityDialog" OnSave="SaveEntityAsync" />
+}
+
+@if (_confirm is not null)
+{
+    <ConfirmDialog Title="@_confirm.Title" Message="@_confirm.Message" ConfirmLabel="@_confirm.ConfirmLabel"
+                   Danger="@_confirm.Danger" OnCancel="CancelConfirm" OnConfirm="ConfirmAsync" />
+}
+
+@if (_move is not null)
+{
+    <MoveDialog Title="@_move.Title" Eyebrow="@_move.Eyebrow" Subtitle="@_move.Subtitle"
+                AllowUnassigned="@_move.AllowUnassigned" UnassignedLabel="@_move.UnassignedLabel"
+                UnassignedNote="@_move.UnassignedNote" CurrentId="@_move.CurrentId"
+                Options="@_move.Options" OnPick="MoveChosenAsync" OnCancel="CloseMove" />
+}
+
+@code {
+    private Book _book = null!;
+    private Guid? _selectedBeatId;
+    private BeatLocation? _location;
+
+    private bool _outlineOpen = true;
+    private bool _aiOpen = true;
+    private bool _focusMode;
+    private bool _narrow;
+
+    private SaveState _saveState = SaveState.Saved;
+    private DateTime? _lastSaved;
+    private string? _saveError;
+
+    private DialogKind _dialog;
+    private EntityEditorRequest? _entityDialog;
+    private ConfirmRequest? _confirm;
+    private MoveRequest? _move;
+
+    private bool _aiBusy;
+    private string _aiText = "";
+    private string? _aiError;
+    private AiAction? _aiAction;
+    private Guid? _aiTargetBeatId;
+    private string? _aiSelection;
+    private CancellationTokenSource? _aiCts;
+
+    private Guid? _undoBeatId;
+    private string? _undoContent;
+
+    private EditorPane? _editor;
+    private DotNetObjectReference<Write>? _self;
+    private bool _shortcutsRegistered;
+    private bool _disposed;
+    private bool _loadWarningShown;
+
+    private static readonly Regex BulletPattern = new(@"^\s*(?:[-*•]|\d+[\.\)])\s+", RegexOptions.Compiled);
+    private static readonly Regex BeatSeparator = new(@"\s+[—–-]\s+", RegexOptions.Compiled);
+
+    private int WordCount => Outline.BookWords(_book);
+
+    private double GoalPercent => _book.WordGoal <= 0
+        ? 0
+        : Math.Clamp(WordCount * 100d / _book.WordGoal, 0, 100);
+
+    private bool HasPrevious => _selectedBeatId is { } id && Outline.Previous(_book, id).HasValue;
+    private bool HasNext => _selectedBeatId is { } id && Outline.Next(_book, id).HasValue;
+
+    private string WorkspaceClasses
+    {
+        get
+        {
+            var classes = new List<string>();
+            if (_outlineOpen)
+            {
+                classes.Add("outline-open");
+            }
+            else
+            {
+                classes.Add("outline-closed");
+            }
+
+            if (_aiOpen)
+            {
+                classes.Add("ai-open");
+            }
+            else
+            {
+                classes.Add("ai-closed");
+            }
+
+            if (_focusMode)
+            {
+                classes.Add("focus-mode");
+            }
+
+            return string.Join(' ', classes);
+        }
+    }
+
+    private string SaveLabel => _saveState switch
+    {
+        SaveState.Saving => "Saving…",
+        SaveState.Error => "Save failed",
+        SaveState.Pending => "Unsaved changes",
+        _ => _lastSaved is { } saved ? $"Saved {saved.ToLocalTime():HH:mm}" : "Saved"
+    };
+
+    private string SaveClass => _saveState switch
+    {
+        SaveState.Saving => "save-saving",
+        SaveState.Error => "save-error",
+        SaveState.Pending => "save-pending",
+        _ => "save-saved"
+    };
+
+    private string? SaveTitle => _saveState == SaveState.Error ? _saveError : null;
+
+    protected override void OnInitialized()
+    {
+        Store.SaveStateChanged += HandleStoreEvent;
+        Store.BookReplaced += HandleBookReplaced;
+        Store.BackupCreated += HandleStoreEvent;
+        AiSettings.Changed += HandleAiSettingsChanged;
+
+        _book = Store.Book;
+        RefreshSaveState();
+        SelectFirstAvailable();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        _self = DotNetObjectReference.Create(this);
+
+        try
+        {
+            _narrow = await JS.InvokeAsync<bool>("scribe.isNarrow");
+            if (_narrow)
+            {
+                _outlineOpen = false;
+                _aiOpen = false;
+            }
+
+            await JS.InvokeVoidAsync("scribe.registerShortcuts", _self);
+            _shortcutsRegistered = true;
+            StateHasChanged();
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
+        if (!_loadWarningShown && !string.IsNullOrWhiteSpace(Store.LoadWarning))
+        {
+            _loadWarningShown = true;
+            Toasts.Show(Store.LoadWarning, ToastKind.Warning);
+        }
+    }
+
+    // ----- Store events -------------------------------------------------------
+
+    private void HandleStoreEvent()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(() =>
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            RefreshSaveState();
+            StateHasChanged();
+        });
+    }
+
+    private void HandleBookReplaced()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(() =>
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _book = Store.Book;
+            if (_selectedBeatId is { } id && Outline.Find(_book, id) is { } existing)
+            {
+                _location = existing;
+            }
+            else
+            {
+                SelectFirstAvailable();
+            }
+
+            StateHasChanged();
+        });
+    }
+
+    private void HandleAiSettingsChanged()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(() =>
+        {
+            if (!_disposed)
+            {
+                StateHasChanged();
+            }
+        });
+    }
+
+    private void RefreshSaveState()
+    {
+        _saveState = Store.State;
+        _lastSaved = Store.LastSavedUtc;
+        _saveError = Store.LastError;
+    }
+
+    private void SelectFirstAvailable()
+    {
+        var first = Outline.Locations(_book).Select(l => (BeatLocation?)l).FirstOrDefault();
+        if (first is { } location)
+        {
+            _selectedBeatId = location.Beat.Id;
+            _location = location;
+        }
+        else
+        {
+            _selectedBeatId = null;
+            _location = null;
+        }
+    }
+
+    private void SelectBeatById(Guid beatId, bool saveCurrent = false)
+    {
+        if (Outline.Find(_book, beatId) is not { } location)
+        {
+            return;
+        }
+
+        _selectedBeatId = beatId;
+        _location = location;
+
+        if (_narrow)
+        {
+            _outlineOpen = false;
+        }
+
+        if (saveCurrent && Store.IsDirty)
+        {
+            _ = Store.SaveAsync();
+        }
+    }
+
+    private void EnsureSelection()
+    {
+        if (_selectedBeatId is { } id && Outline.Find(_book, id) is { } existing)
+        {
+            _location = existing;
+            return;
+        }
+
+        SelectFirstAvailable();
+    }
+
+    private void MarkDirty()
+    {
+        Store.MarkDirty();
+        StateHasChanged();
+    }
+
+    private async Task PersistAsync()
+    {
+        await Store.SaveAsync();
+        RefreshSaveState();
+
+        if (Store.State == SaveState.Error)
+        {
+            Toasts.Show(Store.LastError ?? "Could not save the manuscript.", ToastKind.Error);
+        }
+
+        StateHasChanged();
+    }
+
+    // ----- Navigation --------------------------------------------------------
+
+    private async Task NavigateBeatAsync(int delta)
+    {
+        if (_selectedBeatId is not { } id)
+        {
+            return;
+        }
+
+        var target = Outline.Neighbour(_book, id, delta);
+        if (target is { } location)
+        {
+            SelectBeatById(location.Beat.Id, saveCurrent: true);
+            await Task.CompletedTask;
+        }
+    }
+
+    private void ToggleOutline()
+    {
+        _outlineOpen = !_outlineOpen;
+        if (_outlineOpen)
+        {
+            _focusMode = false;
+            if (_narrow)
+            {
+                _aiOpen = false;
+            }
+        }
+
+        StateHasChanged();
+    }
+
+    private void ToggleAi()
+    {
+        _aiOpen = !_aiOpen;
+        if (_aiOpen)
+        {
+            _focusMode = false;
+            if (_narrow)
+            {
+                _outlineOpen = false;
+            }
+        }
+
+        StateHasChanged();
+    }
+
+    private void ToggleFocusMode()
+    {
+        _focusMode = !_focusMode;
+        StateHasChanged();
+    }
+
+    private void CloseOutlineOnSmallScreen()
+    {
+        _outlineOpen = false;
+        StateHasChanged();
+    }
+
+    private void CloseAiOnSmallScreen()
+    {
+        _aiOpen = false;
+        StateHasChanged();
+    }
+
+    // ----- Outline commands --------------------------------------------------
+
+    private async Task HandleOutlineActionAsync(OutlineAction action)
+    {
+        switch (action.Kind)
+        {
+            case OutlineActionKind.SelectBeat when action.BeatId is { } beatId:
+                SelectBeatById(beatId, saveCurrent: true);
+                break;
+
+            case OutlineActionKind.AddChapter:
+                await AddChapterAsync();
+                break;
+
+            case OutlineActionKind.AddScene when action.ChapterId is { } chapterId:
+                await AddSceneAsync(chapterId);
+                break;
+
+            case OutlineActionKind.AddLooseScene:
+                await AddLooseSceneAsync();
+                break;
+
+            case OutlineActionKind.AddBeat:
+                await AddBeatAsync(action.SceneId);
+                break;
+
+            case OutlineActionKind.ChooseBeatScene when action.BeatId is { } beatId:
+                OpenBeatMove(beatId);
+                break;
+
+            case OutlineActionKind.ChooseSceneChapter when action.SceneId is { } sceneId:
+                OpenSceneMove(sceneId);
+                break;
+
+            case OutlineActionKind.EditChapter when action.ChapterId is { } chapterId:
+                OpenChapterDialog(chapterId);
+                break;
+
+            case OutlineActionKind.EditScene when action.SceneId is { } sceneId:
+                OpenSceneDialog(sceneId);
+                break;
+
+            case OutlineActionKind.DeleteChapter when action.ChapterId is { } chapterId:
+                RequestDeleteChapter(chapterId);
+                break;
+
+            case OutlineActionKind.DeleteScene when action.SceneId is { } sceneId:
+                RequestDeleteScene(sceneId);
+                break;
+
+            case OutlineActionKind.DeleteBeat when action.BeatId is { } beatId:
+                RequestDeleteBeat(beatId);
+                break;
+
+            case OutlineActionKind.MoveChapter when action.ChapterId is { } chapterId:
+                await MoveChapterAsync(chapterId, action.Delta);
+                break;
+
+            case OutlineActionKind.MoveScene when action.SceneId is { } sceneId:
+                await MoveSceneAsync(sceneId, action.Delta);
+                break;
+
+            case OutlineActionKind.MoveBeat when action.BeatId is { } beatId:
+                await MoveBeatAsync(beatId, action.Delta);
+                break;
+        }
+    }
+
+    private async Task AddChapterAsync()
+    {
+        var chapter = new Chapter { Title = $"Chapter {_book.Chapters.Count + 1}" };
+        Store.Edit(book => book.Chapters.Add(chapter));
+        await PersistAsync();
+        StateHasChanged();
+    }
+
+    private async Task AddSceneAsync(Guid chapterId)
+    {
+        var chapter = FindChapter(chapterId);
+        if (chapter is null)
+        {
+            return;
+        }
+
+        var scene = new Scene { Title = $"Scene {chapter.Scenes.Count + 1}" };
+        Store.Edit(_ => chapter.Scenes.Add(scene));
+        await PersistAsync();
+        StateHasChanged();
+    }
+
+    private async Task AddLooseSceneAsync()
+    {
+        var scene = new Scene { Title = $"Scene {_book.Scenes.Count + 1}" };
+        Store.Edit(book => book.Scenes.Add(scene));
+        await PersistAsync();
+        StateHasChanged();
+    }
+
+    private Task CreateFirstBeatAsync() => AddBeatAsync(null);
+
+    private async Task AddBeatAsync(Guid? sceneId)
+    {
+        Scene? scene = null;
+        if (sceneId is { } id)
+        {
+            scene = FindScene(id);
+            if (scene is null)
+            {
+                return;
+            }
+        }
+
+        var beat = new Beat { Status = BeatStatus.Outline };
+        Store.Edit(book => (scene?.Beats ?? book.Beats).Add(beat));
+        await PersistAsync();
+        SelectBeatById(beat.Id);
+        StateHasChanged();
+    }
+
+    private void OpenChapterDialog(Guid chapterId)
+    {
+        var chapter = FindChapter(chapterId);
+        if (chapter is null)
+        {
+            return;
+        }
+
+        _entityDialog = new EntityEditorRequest(
+            EntityKind.Chapter, chapter.Id, null, chapter.Title, chapter.Summary, "", "");
+    }
+
+    private void OpenSceneDialog(Guid sceneId)
+    {
+        var scene = FindScene(sceneId);
+        if (scene is null)
+        {
+            return;
+        }
+
+        var chapterId = _book.Chapters.FirstOrDefault(c => c.Scenes.Contains(scene))?.Id ?? Guid.Empty;
+        _entityDialog = new EntityEditorRequest(
+            EntityKind.Scene, chapterId, scene.Id, scene.Title, scene.Summary, scene.Pov, scene.Setting);
+    }
+
+    private void CloseEntityDialog() => _entityDialog = null;
+
+    private async Task SaveEntityAsync(EntityDraft draft)
+    {
+        var request = _entityDialog;
+        if (request is null)
+        {
+            return;
+        }
+
+        if (request.Kind == EntityKind.Chapter)
+        {
+            var chapter = FindChapter(request.ChapterId);
+            if (chapter is null)
+            {
+                _entityDialog = null;
+                return;
+            }
+
+            Store.Edit(_ =>
+            {
+                chapter.Title = draft.Title;
+                chapter.Summary = draft.Summary;
+            });
+        }
+        else if (request.SceneId is { } sceneId)
+        {
+            var scene = FindScene(sceneId);
+            if (scene is null)
+            {
+                _entityDialog = null;
+                return;
+            }
+
+            Store.Edit(_ =>
+            {
+                scene.Title = draft.Title;
+                scene.Summary = draft.Summary;
+                scene.Pov = draft.Pov;
+                scene.Setting = draft.Setting;
+            });
+        }
+
+        _entityDialog = null;
+        await PersistAsync();
+        StateHasChanged();
+    }
+
+    private void RequestDeleteChapter(Guid chapterId)
+    {
+        var chapter = FindChapter(chapterId);
+        if (chapter is null)
+        {
+            return;
+        }
+
+        var sceneCount = chapter.Scenes.Count;
+        var beatCount = chapter.Scenes.Sum(s => s.Beats.Count);
+
+        _confirm = new ConfirmRequest(
+            "Remove chapter?",
+            $"“{chapter.Title}” will be removed. Its {sceneCount} scene(s) and {beatCount} beat(s) move to Unassigned scenes, so the prose is kept. A safety backup is written first.",
+            "Remove chapter",
+            async () =>
+            {
+                if (!await WriteSafetyBackupAsync())
+                {
+                    return;
+                }
+
+                Store.Edit(book =>
+                {
+                    var scenes = chapter.Scenes.ToList();
+                    book.Chapters.Remove(chapter);
+                    book.Scenes.AddRange(scenes);
+                });
+                await PersistAsync();
+                EnsureSelection();
+                StateHasChanged();
+                Toasts.Show("Chapter removed. Its scenes are now unassigned.", ToastKind.Info);
+            });
+    }
+
+    private void RequestDeleteScene(Guid sceneId)
+    {
+        var scene = FindScene(sceneId);
+        if (scene is null)
+        {
+            return;
+        }
+
+        _confirm = new ConfirmRequest(
+            "Remove scene?",
+            $"“{scene.Title}” will be removed. Its {scene.Beats.Count} beat(s) move to Unassigned beats, so the prose is kept. A safety backup is written first.",
+            "Remove scene",
+            async () =>
+            {
+                if (!await WriteSafetyBackupAsync())
+                {
+                    return;
+                }
+
+                Store.Edit(book =>
+                {
+                    var beats = scene.Beats.ToList();
+                    Outline.SceneContainer(book, scene)?.Remove(scene);
+                    book.Beats.AddRange(beats);
+                });
+                await PersistAsync();
+                EnsureSelection();
+                StateHasChanged();
+                Toasts.Show("Scene removed. Its beats are now unassigned.", ToastKind.Info);
+            });
+    }
+
+    private void RequestDeleteBeat(Guid beatId)
+    {
+        var location = Outline.Find(_book, beatId);
+        if (location is null)
+        {
+            return;
+        }
+
+        var beat = location.Value.Beat;
+
+        _confirm = new ConfirmRequest(
+            "Delete beat?",
+            $"“{TitleOr(beat.Title, "Untitled beat")}” and its prose will be deleted. A safety backup is written first.",
+            "Delete beat",
+            async () =>
+            {
+                if (!await WriteSafetyBackupAsync())
+                {
+                    return;
+                }
+
+                var before = Outline.Locations(_book).Select(l => (BeatLocation?)l).ToList();
+                var index = before.FindIndex(l => l is { } value && value.Beat.Id == beatId);
+
+                Store.Edit(book => Outline.BeatContainer(book, beat)?.Remove(beat));
+                await PersistAsync();
+
+                var remaining = Outline.Locations(_book).Select(l => (BeatLocation?)l).ToList();
+                if (remaining.Count == 0)
+                {
+                    _selectedBeatId = null;
+                    _location = null;
+                }
+                else
+                {
+                    var target = remaining[Math.Clamp(index, 0, remaining.Count - 1)]!.Value;
+                    _selectedBeatId = target.Beat.Id;
+                    _location = target;
+                }
+
+                StateHasChanged();
+                Toasts.Show("Beat deleted.", ToastKind.Info);
+            });
+    }
+
+    private async Task<bool> WriteSafetyBackupAsync()
+    {
+        var backup = await Store.CreateBackupAsync("before-delete");
+        if (backup is not null)
+        {
+            return true;
+        }
+
+        Toasts.Show("The safety backup could not be written, so the delete was cancelled.", ToastKind.Error);
+        return false;
+    }
+
+    private async Task MoveChapterAsync(Guid chapterId, int delta)
+    {
+        var chapter = FindChapter(chapterId);
+        if (chapter is null)
+        {
+            return;
+        }
+
+        Store.Edit(book => Outline.MoveChapter(book, chapter, delta));
+        await PersistAsync();
+        StateHasChanged();
+    }
+
+    private async Task MoveSceneAsync(Guid sceneId, int delta)
+    {
+        var scene = FindScene(sceneId);
+        if (scene is null)
+        {
+            return;
+        }
+
+        Store.Edit(book => Outline.MoveScene(book, scene, delta));
+        await PersistAsync();
+        StateHasChanged();
+    }
+
+    private async Task MoveBeatAsync(Guid beatId, int delta)
+    {
+        var location = Outline.Find(_book, beatId);
+        if (location is null)
+        {
+            return;
+        }
+
+        Store.Edit(book => Outline.MoveBeat(book, location.Value.Beat, delta));
+        await PersistAsync();
+        StateHasChanged();
+    }
+
+    // ----- Placement ---------------------------------------------------------
+
+    private void OpenBeatMove(Guid beatId)
+    {
+        var location = Outline.Find(_book, beatId);
+        if (location is null)
+        {
+            return;
+        }
+
+        var options = new List<MoveOption>();
+        foreach (var (chapter, scene) in Outline.AllScenes(_book))
+        {
+            if (location.Value.Scene?.Id == scene.Id)
+            {
+                continue;
+            }
+
+            var label = chapter is null
+                ? $"Unassigned scenes / {TitleOr(scene.Title, "Untitled scene")}"
+                : $"Chapter {_book.Chapters.IndexOf(chapter) + 1} / {TitleOr(scene.Title, "Untitled scene")}";
+            var note = string.IsNullOrWhiteSpace(scene.Pov) ? "" : $"POV: {scene.Pov}";
+            options.Add(new MoveOption(scene.Id, label, note));
+        }
+
+        _move = new MoveRequest(
+            "Place beat in a scene",
+            "Beat",
+            $"“{TitleOr(location.Value.Beat.Title, "Untitled beat")}” moves with its prose.",
+            location.Value.Scene is not null,
+            "Unassigned beats",
+            "Keep it loose until you know where it belongs.",
+            location.Value.Scene?.Id,
+            options,
+            id => AssignBeatAsync(beatId, id));
+    }
+
+    private void OpenSceneMove(Guid sceneId)
+    {
+        var scene = FindScene(sceneId);
+        if (scene is null)
+        {
+            return;
+        }
+
+        var current = _book.Chapters.FirstOrDefault(c => c.Scenes.Contains(scene));
+        var options = new List<MoveOption>();
+        for (var i = 0; i < _book.Chapters.Count; i++)
+        {
+            var chapter = _book.Chapters[i];
+            if (current?.Id == chapter.Id)
+            {
+                continue;
+            }
+
+            var note = string.IsNullOrWhiteSpace(chapter.Summary) ? "" : chapter.Summary.Trim();
+            options.Add(new MoveOption(chapter.Id, $"Chapter {i + 1} — {TitleOr(chapter.Title, "Untitled chapter")}", note));
+        }
+
+        _move = new MoveRequest(
+            "Place scene in a chapter",
+            "Scene",
+            $"“{TitleOr(scene.Title, "Untitled scene")}” takes its beats with it.",
+            current is not null,
+            "Unassigned scenes",
+            "Keep the scene waiting outside the chapter order.",
+            current?.Id,
+            options,
+            id => AssignSceneAsync(sceneId, id));
+    }
+
+    private void CloseMove() => _move = null;
+
+    private async Task MoveChosenAsync(Guid? id)
+    {
+        var request = _move;
+        if (request is null)
+        {
+            return;
+        }
+
+        _move = null;
+        await request.Apply(id);
+    }
+
+    private async Task AssignBeatAsync(Guid beatId, Guid? sceneId)
+    {
+        var location = Outline.Find(_book, beatId);
+        if (location is null)
+        {
+            return;
+        }
+
+        Scene? target = null;
+        if (sceneId is { } id)
+        {
+            target = FindScene(id);
+            if (target is null)
+            {
+                return;
+            }
+        }
+
+        if (!Outline.PlaceBeat(_book, location.Value.Beat, target))
+        {
+            return;
+        }
+
+        Store.MarkDirty();
+        await PersistAsync();
+        SelectBeatById(beatId);
+        StateHasChanged();
+        Toasts.Show(
+            target is null
+                ? "Beat moved to unassigned."
+                : $"Beat placed in “{TitleOr(target.Title, "Untitled scene")}”.",
+            ToastKind.Success);
+    }
+
+    private async Task AssignSceneAsync(Guid sceneId, Guid? chapterId)
+    {
+        var scene = FindScene(sceneId);
+        if (scene is null)
+        {
+            return;
+        }
+
+        Chapter? target = null;
+        if (chapterId is { } id)
+        {
+            target = FindChapter(id);
+            if (target is null)
+            {
+                return;
+            }
+        }
+
+        if (!Outline.PlaceScene(_book, scene, target))
+        {
+            return;
+        }
+
+        Store.MarkDirty();
+        await PersistAsync();
+        EnsureSelection();
+        StateHasChanged();
+        Toasts.Show(
+            target is null
+                ? "Scene moved to unassigned."
+                : $"Scene placed in “{TitleOr(target.Title, "Untitled chapter")}”.",
+            ToastKind.Success);
+    }
+
+    // ----- Book and dialogs --------------------------------------------------
+
+    private void OpenBookSettings() => _dialog = DialogKind.Book;
+    private void OpenAiSettings() => _dialog = DialogKind.Ai;
+    private void OpenBackups() => _dialog = DialogKind.Backups;
+    private void OpenShortcuts() => _dialog = DialogKind.Shortcuts;
+
+    private void CloseDialog() => _dialog = DialogKind.None;
+
+    private async Task SaveBookAsync(BookDraft draft)
+    {
+        Store.Edit(book =>
+        {
+            book.Title = draft.Title;
+            book.Subtitle = draft.Subtitle;
+            book.Author = draft.Author;
+            book.WordGoal = draft.WordGoal;
+        });
+
+        _dialog = DialogKind.None;
+        await PersistAsync();
+        StateHasChanged();
+    }
+
+    private void RequestNewBook()
+    {
+        _confirm = new ConfirmRequest(
+            "Start a new book?",
+            "This clears the workspace and starts with one blank beat. The current manuscript is backed up first and can be restored from Backups.",
+            "Start new book",
+            async () =>
+            {
+                await Store.ReplaceBookAsync(SeedBook.CreateStarter(), "new-book");
+                _selectedBeatId = null;
+                _location = null;
+                _aiText = "";
+                _aiError = null;
+                _aiAction = null;
+                _undoBeatId = null;
+                _undoContent = null;
+                _dialog = DialogKind.None;
+                SelectFirstAvailable();
+                StateHasChanged();
+                Toasts.Show("A fresh book is ready. The old manuscript was backed up.", ToastKind.Success);
+            });
+    }
+
+    private void CancelConfirm() => _confirm = null;
+
+    private async Task ConfirmAsync()
+    {
+        var request = _confirm;
+        if (request is null)
+        {
+            return;
+        }
+
+        _confirm = null;
+        StateHasChanged();
+
+        try
+        {
+            await request.Action();
+        }
+        catch (Exception ex)
+        {
+            Toasts.Show(ex.Message, ToastKind.Error);
+        }
+    }
+
+    private async Task BackupNowAsync()
+    {
+        var info = await Store.CreateBackupAsync("manual");
+        if (info is null)
+        {
+            Toasts.Show("The backup could not be written. Check that the App_Data folder is writable.", ToastKind.Error);
+        }
+        else
+        {
+            Toasts.Show($"Backup written at {info.CreatedUtc.ToLocalTime():HH:mm:ss}.", ToastKind.Success);
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task CloseMenusAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("scribe.closeMenus");
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    // ----- AI muse -----------------------------------------------------------
+
+    private async Task RunAiAsync(AiRunRequest run)
+    {
+        if (_aiBusy)
+        {
+            return;
+        }
+
+        if (_location is not { } location)
+        {
+            Toasts.Show("Select a beat first.", ToastKind.Warning);
+            return;
+        }
+
+        if (run.Action == AiAction.Freeform && string.IsNullOrWhiteSpace(run.Instruction))
+        {
+            return;
+        }
+
+        string? selection = null;
+        if (run.Action is AiAction.TightenProse or AiAction.Freeform)
+        {
+            selection = await GetSelectionAsync();
+        }
+
+        if (run.Action == AiAction.TightenProse &&
+            string.IsNullOrWhiteSpace(selection) &&
+            string.IsNullOrWhiteSpace(location.Beat.Content))
+        {
+            Toasts.Show("Select a passage or write something first.", ToastKind.Warning);
+            return;
+        }
+
+        _aiOpen = true;
+        _focusMode = false;
+        if (_narrow)
+        {
+            _outlineOpen = false;
+        }
+        _aiTargetBeatId = location.Beat.Id;
+        _aiSelection = selection;
+        _aiAction = run.Action;
+        _aiText = "";
+        _aiError = null;
+        _aiBusy = true;
+
+        var cts = new CancellationTokenSource();
+        _aiCts = cts;
+        StateHasChanged();
+
+        var request = AiPrompts.Build(run.Action, location, _book, selection, run.Instruction);
+        var buffer = new StringBuilder();
+        var lastFlush = DateTime.MinValue;
+
+        try
+        {
+            await foreach (var chunk in Ai.StreamAsync(request, cts.Token))
+            {
+                buffer.Append(chunk);
+
+                if ((DateTime.UtcNow - lastFlush).TotalMilliseconds >= 55)
+                {
+                    _aiText = buffer.ToString();
+                    lastFlush = DateTime.UtcNow;
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            if (buffer.Length > 0)
+            {
+                buffer.Append("\n\n[stopped]");
+            }
+        }
+        catch (Exception ex)
+        {
+            _aiError = ex.Message;
+        }
+        finally
+        {
+            _aiText = buffer.ToString();
+            _aiBusy = false;
+
+            if (ReferenceEquals(_aiCts, cts))
+            {
+                _aiCts = null;
+            }
+
+            cts.Dispose();
+            StateHasChanged();
+        }
+    }
+
+    private void StopAi() => _aiCts?.Cancel();
+
+    private async Task<string?> GetSelectionAsync()
+    {
+        if (_editor is null)
+        {
+            return null;
+        }
+
+        return await _editor.GetSelectionAsync();
+    }
+
+    private async Task AppendAiAsync() => await ApplyAiAsync(replace: false);
+
+    private async Task ReplaceAiAsync() => await ApplyAiAsync(replace: true);
+
+    private async Task ApplyAiAsync(bool replace)
+    {
+        if (_aiTargetBeatId is not { } beatId || string.IsNullOrWhiteSpace(_aiText))
+        {
+            return;
+        }
+
+        var location = Outline.Find(_book, beatId);
+        if (location is null)
+        {
+            Toasts.Show("The beat this draft belongs to no longer exists.", ToastKind.Warning);
+            return;
+        }
+
+        var beat = location.Value.Beat;
+        var text = _aiText.Trim();
+
+        _undoBeatId = beat.Id;
+        _undoContent = beat.Content;
+
+        if (replace)
+        {
+            if (!string.IsNullOrWhiteSpace(_aiSelection))
+            {
+                var index = beat.Content.IndexOf(_aiSelection, StringComparison.Ordinal);
+                if (index < 0)
+                {
+                    Toasts.Show("The selected text changed while the muse was writing. Copy the result instead.", ToastKind.Warning);
+                    _undoBeatId = null;
+                    _undoContent = null;
+                    return;
+                }
+
+                beat.Content = beat.Content[..index] + text + beat.Content[(index + _aiSelection.Length)..];
+            }
+            else
+            {
+                beat.Content = text;
+            }
+        }
+        else
+        {
+            beat.Content = string.IsNullOrWhiteSpace(beat.Content)
+                ? text
+                : beat.Content.TrimEnd() + "\n\n" + text;
+        }
+
+        beat.UpdatedUtc = DateTime.UtcNow;
+        if (beat.Status == BeatStatus.Outline)
+        {
+            beat.Status = BeatStatus.Draft;
+        }
+
+        Store.MarkDirty();
+        await PersistAsync();
+        SelectBeatById(beat.Id);
+        StateHasChanged();
+        Toasts.Show(replace ? "The AI revision replaced the text." : "AI text added to the beat.", ToastKind.Success);
+    }
+
+    private async Task UndoAiAsync()
+    {
+        if (_undoBeatId is not { } beatId || _undoContent is null)
+        {
+            return;
+        }
+
+        var location = Outline.Find(_book, beatId);
+        if (location is null)
+        {
+            Toasts.Show("That beat no longer exists.", ToastKind.Warning);
+            _undoBeatId = null;
+            _undoContent = null;
+            return;
+        }
+
+        location.Value.Beat.Content = _undoContent;
+        location.Value.Beat.UpdatedUtc = DateTime.UtcNow;
+        Store.MarkDirty();
+        await PersistAsync();
+
+        _undoBeatId = null;
+        _undoContent = null;
+        SelectBeatById(beatId);
+        StateHasChanged();
+        Toasts.Show("Reverted the last AI edit.", ToastKind.Success);
+    }
+
+    private async Task AddAiBeatsAsync()
+    {
+        var parsed = ParseBeatLines(_aiText);
+        if (parsed.Count == 0)
+        {
+            Toasts.Show("That response didn't contain a bulleted list of beats.", ToastKind.Warning);
+            return;
+        }
+
+        if (_aiTargetBeatId is not { } targetId || Outline.Find(_book, targetId) is not { } location)
+        {
+            Toasts.Show("The beat this was written for no longer exists.", ToastKind.Warning);
+            return;
+        }
+
+        var container = location.Scene?.Beats ?? _book.Beats;
+        var insertAt = Math.Clamp(location.BeatIndex + 1, 0, container.Count);
+
+        Store.Edit(_ => container.InsertRange(insertAt, parsed));
+        await PersistAsync();
+
+        SelectBeatById(parsed[0].Id);
+        _aiText = "";
+        _aiError = null;
+        _aiAction = null;
+        StateHasChanged();
+        Toasts.Show(
+            location.Scene is { } scene
+                ? $"Added {parsed.Count} beat(s) to “{scene.Title}”."
+                : $"Added {parsed.Count} unassigned beat(s).",
+            ToastKind.Success);
+    }
+
+    private static List<Beat> ParseBeatLines(string text)
+    {
+        var beats = new List<Beat>();
+
+        foreach (var raw in text.Split('\n'))
+        {
+            if (!BulletPattern.IsMatch(raw))
+            {
+                continue;
+            }
+
+            var line = BulletPattern.Replace(raw, "").Trim();
+            if (line.Length == 0)
+            {
+                continue;
+            }
+
+            var title = line;
+            var brief = "";
+            var separator = BeatSeparator.Match(line);
+            if (separator.Success)
+            {
+                title = line[..separator.Index].Trim();
+                brief = line[(separator.Index + separator.Length)..].Trim();
+            }
+
+            if (title.Length == 0)
+            {
+                continue;
+            }
+
+            if (title.Length > 110)
+            {
+                title = title[..107] + "…";
+            }
+
+            beats.Add(new Beat
+            {
+                Title = title,
+                Brief = brief,
+                Status = BeatStatus.Outline
+            });
+        }
+
+        return beats;
+    }
+
+    private Chapter? FindChapter(Guid chapterId) =>
+        _book.Chapters.FirstOrDefault(c => c.Id == chapterId);
+
+    private Scene? FindScene(Guid sceneId) =>
+        Outline.FindScene(_book, sceneId);
+
+    private static string TitleOr(string? value, string fallback) =>
+        string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+
+    // ----- Keyboard shortcuts (invoked from scribe.js) -----------------------
+
+    [JSInvokable]
+    public async Task SaveNow()
+    {
+        await Store.FlushAsync();
+        RefreshSaveState();
+
+        if (Store.State == SaveState.Error)
+        {
+            Toasts.Show(Store.LastError ?? "Could not save the manuscript.", ToastKind.Error);
+        }
+        else if (Store.State == SaveState.Saved)
+        {
+            Toasts.Show("Saved.", ToastKind.Success);
+        }
+
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public void NavigateBeat(int delta)
+    {
+        if (_selectedBeatId is not { } id)
+        {
+            return;
+        }
+
+        if (Outline.Neighbour(_book, id, delta) is { } location)
+        {
+            SelectBeatById(location.Beat.Id, saveCurrent: true);
+            StateHasChanged();
+        }
+    }
+
+    [JSInvokable]
+    public void ToggleFocus() => ToggleFocusMode();
+
+    [JSInvokable]
+    public void ToggleAiFromShortcut() => ToggleAi();
+
+    [JSInvokable]
+    public void EscapeShortcut()
+    {
+        if (_confirm is not null)
+        {
+            _confirm = null;
+            StateHasChanged();
+            return;
+        }
+
+        if (_entityDialog is not null)
+        {
+            _entityDialog = null;
+            StateHasChanged();
+            return;
+        }
+
+        if (_dialog != DialogKind.None)
+        {
+            _dialog = DialogKind.None;
+            StateHasChanged();
+            return;
+        }
+
+        if (_aiBusy)
+        {
+            StopAi();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;
+
+        Store.SaveStateChanged -= HandleStoreEvent;
+        Store.BookReplaced -= HandleBookReplaced;
+        Store.BackupCreated -= HandleStoreEvent;
+        AiSettings.Changed -= HandleAiSettingsChanged;
+
+        _aiCts?.Cancel();
+        _aiCts?.Dispose();
+        _aiCts = null;
+
+        if (_shortcutsRegistered)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("scribe.unregisterShortcuts");
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+
+        _self?.Dispose();
+    }
+
+    private enum DialogKind
+    {
+        None,
+        Book,
+        Ai,
+        Backups,
+        Shortcuts
+    }
+
+    private sealed record ConfirmRequest(
+        string Title,
+        string Message,
+        string ConfirmLabel,
+        Func<Task> Action,
+        bool Danger = true);
+
+    private sealed record MoveRequest(
+        string Title,
+        string Eyebrow,
+        string Subtitle,
+        bool AllowUnassigned,
+        string UnassignedLabel,
+        string UnassignedNote,
+        Guid? CurrentId,
+        IReadOnlyList<MoveOption> Options,
+        Func<Guid?, Task> Apply);
+}

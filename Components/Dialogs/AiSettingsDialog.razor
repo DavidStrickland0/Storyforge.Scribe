@@ -1,0 +1,223 @@
+@using StoryForge.Scribe.Services
+@using StoryForge.Scribe.Services.Ai
+@inject AiSettingsStore SettingsStore
+@inject AiAssistant Assistant
+@inject ToastService Toasts
+
+<Modal Title="AI muse settings" Eyebrow="Settings" Subtitle="Connect a model, or write with the offline muse." OnClose="OnClose" Class="modal-settings">
+    <ChildContent>
+        <div class="preset-row" role="group" aria-label="Connection presets">
+            @foreach (var preset in Presets)
+            {
+                <button type="button" class="preset @(IsActive(preset) ? "is-active" : "")"
+                        title="@preset.Note" @onclick="() => ApplyPreset(preset)">
+                    @preset.Label
+                </button>
+            }
+        </div>
+
+        <div class="form-grid">
+            <label class="field span-2">
+                <span>Connection</span>
+                <select @bind="_settings.Provider">
+                    <option value="@AiProviders.Offline">Offline muse — no model</option>
+                    <option value="@AiProviders.OpenAi">OpenAI-compatible API</option>
+                    <option value="@AiProviders.Anthropic">Anthropic Messages API</option>
+                </select>
+            </label>
+
+            <label class="field span-2">
+                <span>Base URL</span>
+                <input @bind="_settings.BaseUrl" @bind:event="oninput" placeholder="https://api.openai.com/v1" spellcheck="false" />
+                <small>OpenAI-compatible endpoints usually end in <code>/v1</code>. Ollama and LM Studio run locally.</small>
+            </label>
+
+            <label class="field">
+                <span>Model</span>
+                <input @bind="_settings.Model" @bind:event="oninput" placeholder="gpt-4o-mini" spellcheck="false" />
+            </label>
+
+            <label class="field">
+                <span>API key</span>
+                <div class="input-row">
+                    <input type="@(_showKey ? "text" : "password")" @bind="_settings.ApiKey" @bind:event="oninput"
+                           placeholder="sk-…" autocomplete="off" spellcheck="false" />
+                    <button type="button" class="icon-btn" title="@(_showKey ? "Hide key" : "Show key")" @onclick="() => _showKey = !_showKey">
+                        <Icon Name="@(_showKey ? "compress" : "key")" Size="15" />
+                    </button>
+                </div>
+            </label>
+
+            <label class="field">
+                <span>Temperature · @_settings.Temperature.ToString("0.00")</span>
+                <input type="range" min="0" max="2" step="0.05" @bind="_settings.Temperature" @bind:event="oninput" />
+                <small>Higher is more surprising. Fiction usually likes 0.7–1.0.</small>
+            </label>
+
+            <label class="field">
+                <span>Max response tokens</span>
+                <input type="number" min="64" max="8192" step="64" @bind="_settings.MaxTokens" />
+                <small>Roughly 0.75 words per token.</small>
+            </label>
+
+            <label class="field">
+                <span>Reasoning effort</span>
+                <select @bind="_settings.ReasoningEffort">
+                    <option value="">Provider default</option>
+                    <option value="none">None — answer directly</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                </select>
+                <small>For thinking models (Qwen, o-series, GPT-5) on OpenAI-compatible endpoints. “None” stops hidden reasoning from using the whole response budget.</small>
+            </label>
+        </div>
+
+        @if (SettingsStore.HasEnvironmentKey)
+        {
+            <p class="note note-info">
+                <Icon Name="info" Size="14" />
+                An API key is set through an environment variable, which overrides the field above.
+            </p>
+        }
+
+        @if (_settings.IsOffline)
+        {
+            <p class="note">
+                <Icon Name="info" Size="14" />
+                Offline mode offers craft prompts instead of generated prose. Nothing leaves this machine.
+            </p>
+        }
+        else
+        {
+            <p class="note">
+                <Icon Name="key" Size="14" />
+                Settings, including the key, are stored in <code>App_Data/settings.json</code> on this machine. Requests go directly to the provider you choose.
+            </p>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(_testResult))
+        {
+            <p class="test-result success"><Icon Name="check" Size="14" /> Connected. The model replied: “@_testResult”</p>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(_testError))
+        {
+            <p class="test-result error"><Icon Name="alert" Size="14" /> @_testError</p>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(_saveError))
+        {
+            <p class="test-result error"><Icon Name="alert" Size="14" /> @_saveError</p>
+        }
+    </ChildContent>
+
+    <Footer>
+        <button type="button" class="btn ghost" @onclick="() => OnClose.InvokeAsync()">Cancel</button>
+        <button type="button" class="btn" disabled="@(_testing || _settings.IsOffline)" @onclick="TestAsync">
+            @if (_testing)
+            {
+                <span>Testing…</span>
+            }
+            else
+            {
+                <span><Icon Name="send" Size="14" /> Test connection</span>
+            }
+        </button>
+        <button type="button" class="btn primary" @onclick="SaveAsync">Save settings</button>
+    </Footer>
+</Modal>
+
+@code {
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private AiSettings _settings = new();
+    private bool _showKey;
+    private bool _testing;
+    private string? _testResult;
+    private string? _testError;
+    private string? _saveError;
+
+    private static readonly Preset[] Presets =
+    [
+        new("Offline", AiProviders.Offline, "", "", "Craft guidance only."),
+        new("OpenAI", AiProviders.OpenAi, "https://api.openai.com/v1", "gpt-4o-mini", "Official OpenAI API."),
+        new("Anthropic", AiProviders.Anthropic, "https://api.anthropic.com", "claude-sonnet-4-5", "Claude via the Messages API."),
+        new("Gemini", AiProviders.OpenAi, "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash", "Google Gemini through its OpenAI-compatible endpoint."),
+        new("OpenRouter", AiProviders.OpenAi, "https://openrouter.ai/api/v1", "openai/gpt-4o-mini", "Many models behind one key."),
+        new("Ollama", AiProviders.OpenAi, "http://localhost:11434/v1", "llama3.1", "Local models. No key needed.", "none"),
+        new("LM Studio", AiProviders.OpenAi, "http://localhost:1234/v1", "local-model", "Local models. No key needed.")
+    ];
+
+    protected override void OnInitialized()
+    {
+        _settings = SettingsStore.Current;
+    }
+
+    private void ApplyPreset(Preset preset)
+    {
+        _settings.Provider = preset.Provider;
+        if (preset.Provider != AiProviders.Offline)
+        {
+            _settings.BaseUrl = preset.BaseUrl;
+            _settings.Model = preset.Model;
+        }
+
+        _settings.ReasoningEffort = preset.ReasoningEffort;
+
+        _testResult = null;
+        _testError = null;
+    }
+
+    private bool IsActive(Preset preset) =>
+        string.Equals(_settings.Provider, preset.Provider, StringComparison.OrdinalIgnoreCase) &&
+        (preset.Provider == AiProviders.Offline ||
+         (string.Equals(_settings.BaseUrl.TrimEnd('/'), preset.BaseUrl.TrimEnd('/'), StringComparison.OrdinalIgnoreCase) &&
+          string.Equals(_settings.Model, preset.Model, StringComparison.OrdinalIgnoreCase)));
+
+    private async Task TestAsync()
+    {
+        _testing = true;
+        _testResult = null;
+        _testError = null;
+        StateHasChanged();
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        try
+        {
+            _testResult = await Assistant.TestAsync(_settings, cts.Token);
+        }
+        catch (Exception ex) when (ex is AiException or HttpRequestException or OperationCanceledException)
+        {
+            _testError = ex is OperationCanceledException
+                ? "The test timed out. Check the base URL and network."
+                : ex.Message;
+        }
+        catch (Exception ex)
+        {
+            _testError = ex.Message;
+        }
+        finally
+        {
+            _testing = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        _saveError = null;
+        try
+        {
+            SettingsStore.Save(_settings);
+            Toasts.Show("AI settings saved.", ToastKind.Success);
+            await OnClose.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            _saveError = ex.Message;
+        }
+    }
+
+    private sealed record Preset(string Label, string Provider, string BaseUrl, string Model, string Note, string ReasoningEffort = "");
+}

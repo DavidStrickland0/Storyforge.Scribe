@@ -1,0 +1,203 @@
+@using StoryForge.Scribe.Services
+@implements IDisposable
+@inject BookStore Store
+@inject ToastService Toasts
+
+<Modal Title="Backups" Eyebrow="Safety net" OnClose="OnClose" Class="modal-backups">
+    <ChildContent>
+        <div class="backup-summary">
+            <div>
+                <p class="eyebrow">Schedule</p>
+                <p class="backup-big">Every @Store.Options.BackupIntervalMinutes minutes</p>
+                <p class="backup-sub">A snapshot is taken when the manuscript has changed. The last @Store.Options.MaxBackups snapshots are kept.</p>
+            </div>
+            <div class="backup-last">
+                <p class="eyebrow">Last backup</p>
+                <p class="backup-big">@LastBackupLabel</p>
+                <p class="backup-sub">Stored in <code>@Store.Paths.DataDirectory</code></p>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(_message))
+        {
+            <p class="note note-success"><Icon Name="check" Size="14" /> @_message</p>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(_error))
+        {
+            <p class="note note-error"><Icon Name="alert" Size="14" /> @_error</p>
+        }
+
+        @if (_pendingRestore is not null)
+        {
+            <div class="restore-confirm">
+                <div>
+                    <strong>Restore this snapshot?</strong>
+                    <span>The current manuscript is backed up first, then replaced.</span>
+                </div>
+                <div class="restore-confirm-actions">
+                    <button type="button" class="btn ghost small" @onclick="() => _pendingRestore = null">Cancel</button>
+                    <button type="button" class="btn danger small" disabled="@_busy" @onclick="RestoreAsync">Restore</button>
+                </div>
+            </div>
+        }
+
+        <div class="backup-list">
+            @if (_backups.Count == 0)
+            {
+                <div class="backup-empty">
+                    <Icon Name="clock" Size="22" />
+                    <p>No snapshots yet. A backup is written automatically every @Store.Options.BackupIntervalMinutes minutes, or right now if you ask.</p>
+                </div>
+            }
+            else
+            {
+                @foreach (var backup in _backups)
+                {
+                    <div class="backup-row">
+                        <div class="backup-when">
+                            <strong>@backup.CreatedUtc.ToLocalTime().ToString("MMM d, HH:mm:ss")</strong>
+                            <span>@backup.CreatedUtc.ToLocalTime().ToString("yyyy") · @FormatSize(backup.SizeBytes)</span>
+                        </div>
+                        <span class="backup-reason reason-@ReasonClass(backup.Reason)">@ReasonLabel(backup.Reason)</span>
+                        <button type="button" class="btn ghost small" disabled="@_busy"
+                                @onclick="() => RequestRestore(backup.FileName)">
+                            <Icon Name="restore" Size="14" /> Restore
+                        </button>
+                    </div>
+                }
+            }
+        </div>
+    </ChildContent>
+
+    <Footer>
+        <span class="modal-foot-note">Snapshots are full copies of the book file.</span>
+        <button type="button" class="btn ghost" @onclick="() => OnClose.InvokeAsync()">Close</button>
+        <button type="button" class="btn primary" disabled="@_busy" @onclick="BackupNowAsync">
+            @if (_busy)
+            {
+                <span>Working…</span>
+            }
+            else
+            {
+                <span><Icon Name="clock" Size="14" /> Back up now</span>
+            }
+        </button>
+    </Footer>
+</Modal>
+
+@code {
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private List<BackupInfo> _backups = [];
+    private bool _busy;
+    private string? _message;
+    private string? _error;
+    private string? _pendingRestore;
+
+    private string LastBackupLabel => Store.LastBackupUtc is { } last
+        ? last.ToLocalTime().ToString("MMM d, HH:mm")
+        : "None yet";
+
+    protected override void OnInitialized()
+    {
+        Reload();
+        Store.BackupCreated += HandleBackupCreated;
+    }
+
+    private void HandleBackupCreated() => _ = InvokeAsync(() =>
+    {
+        Reload();
+        StateHasChanged();
+    });
+
+    private void Reload() => _backups = Store.ListBackups().ToList();
+
+    public void Dispose() => Store.BackupCreated -= HandleBackupCreated;
+
+    private async Task BackupNowAsync()
+    {
+        _busy = true;
+        _message = null;
+        _error = null;
+
+        try
+        {
+            var info = await Store.CreateBackupAsync("manual");
+            if (info is null)
+            {
+                _error = "The backup could not be written. Check that the App_Data folder is writable.";
+            }
+            else
+            {
+                _message = $"Snapshot written at {info.CreatedUtc.ToLocalTime():HH:mm:ss}.";
+                Toasts.Show("Backup written.", ToastKind.Success);
+            }
+
+            Reload();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void RequestRestore(string fileName)
+    {
+        _pendingRestore = fileName;
+        _message = null;
+        _error = null;
+    }
+
+    private async Task RestoreAsync()
+    {
+        if (_pendingRestore is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            await Store.RestoreBackupAsync(_pendingRestore);
+            Toasts.Show("Backup restored. Your previous state was saved first.", ToastKind.Success);
+            await OnClose.InvokeAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+            _pendingRestore = null;
+        }
+    }
+
+    private static string ReasonLabel(string reason) => reason switch
+    {
+        "scheduled" => "automatic",
+        "manual" => "manual",
+        "before-restore" => "before restore",
+        var other when other.StartsWith("before-", StringComparison.Ordinal) => "safety",
+        _ => reason.Replace('-', ' ')
+    };
+
+    private static string ReasonClass(string reason) => reason switch
+    {
+        "scheduled" => "auto",
+        "manual" => "manual",
+        "before-restore" => "safety",
+        var other when other.StartsWith("before-", StringComparison.Ordinal) => "safety",
+        _ => "other"
+    };
+
+    private static string FormatSize(long bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024d:0.#} KB",
+        _ => $"{bytes / (1024d * 1024d):0.#} MB"
+    };
+}

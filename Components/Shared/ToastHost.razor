@@ -1,0 +1,46 @@
+@using StoryForge.Scribe.Services
+@implements IDisposable
+@inject ToastService Toasts
+
+@if (_messages.Count > 0)
+{
+    <div class="toasts" aria-live="polite">
+        @foreach (var message in _messages)
+        {
+            <div class="toast toast-@message.Kind.ToString().ToLowerInvariant()">
+                <Icon Name="@IconFor(message.Kind)" Size="16" />
+                <span class="toast-text">@message.Text</span>
+                <button type="button" class="toast-close" @onclick="() => Toasts.Dismiss(message.Id)" aria-label="Dismiss">
+                    <Icon Name="close" Size="14" />
+                </button>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private IReadOnlyList<ToastMessage> _messages = [];
+
+    protected override void OnInitialized()
+    {
+        _messages = Toasts.Messages;
+        Toasts.Changed += HandleChanged;
+    }
+
+    private void HandleChanged() =>
+        _ = InvokeAsync(() =>
+        {
+            _messages = Toasts.Messages;
+            StateHasChanged();
+        });
+
+    private static string IconFor(ToastKind kind) => kind switch
+    {
+        ToastKind.Success => "check",
+        ToastKind.Warning => "alert",
+        ToastKind.Error => "alert",
+        _ => "info"
+    };
+
+    public void Dispose() => Toasts.Changed -= HandleChanged;
+}

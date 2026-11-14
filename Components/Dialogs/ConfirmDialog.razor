@@ -1,0 +1,21 @@
+@using StoryForge.Scribe.Components.Dialogs
+
+<Modal Title="@Title" Eyebrow="@Eyebrow" OnClose="OnCancel" Class="@(Danger ? "modal-danger" : "")">
+    <ChildContent>
+        <p class="dialog-text">@Message</p>
+    </ChildContent>
+    <Footer>
+        <button type="button" class="btn ghost" @onclick="() => OnCancel.InvokeAsync()">Cancel</button>
+        <button type="button" class="btn @(Danger ? "danger" : "primary")" @onclick="() => OnConfirm.InvokeAsync()">@ConfirmLabel</button>
+    </Footer>
+</Modal>
+
+@code {
+    [Parameter] public string Title { get; set; } = "Are you sure?";
+    [Parameter] public string? Eyebrow { get; set; }
+    [Parameter] public string Message { get; set; } = "";
+    [Parameter] public string ConfirmLabel { get; set; } = "Confirm";
+    [Parameter] public bool Danger { get; set; } = true;
+    [Parameter] public EventCallback OnCancel { get; set; }
+    [Parameter] public EventCallback OnConfirm { get; set; }
+}

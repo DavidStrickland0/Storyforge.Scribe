@@ -1,0 +1,410 @@
+@using StoryForge.Scribe.Components.Workspace
+@using StoryForge.Scribe.Domain
+
+<aside class="outline-panel" aria-label="Manuscript outline">
+    <div class="panel-head outline-head">
+        <div>
+            <p class="eyebrow">Manuscript</p>
+            <p class="outline-stat">@WritingStats.FormatWords(TotalWords) words</p>
+        </div>
+        <button type="button" class="icon-btn" title="New unassigned beat" aria-label="New unassigned beat"
+                @onclick="() => Act(OutlineActionKind.AddBeat)">
+            <Icon Name="plus" />
+        </button>
+    </div>
+
+    <div class="outline-goal" title="@TotalWords.ToString("N0") of @Book.WordGoal.ToString("N0") words">
+        <div class="goal-track"><span style="width:@GoalPercent.ToString("0.#")%"></span></div>
+        <span>@GoalPercent.ToString("0")% of goal</span>
+    </div>
+
+    <div class="outline-search">
+        <Icon Name="search" Size="15" />
+        <input value="@_filter" @oninput="OnFilterInput" placeholder="Search beats" aria-label="Search beats" />
+        @if (!string.IsNullOrEmpty(_filter))
+        {
+            <button type="button" class="search-clear" @onclick="ClearFilter" aria-label="Clear search">
+                <Icon Name="close" Size="13" />
+            </button>
+        }
+    </div>
+
+    <div class="outline-scroll">
+        @if (IsEmpty)
+        {
+            <div class="outline-empty">
+                <p>Every book starts with a beat.</p>
+                <button type="button" class="btn small" @onclick="() => Act(OutlineActionKind.AddBeat)">
+                    <Icon Name="plus" Size="14" /> Write the first beat
+                </button>
+            </div>
+        }
+        else
+        {
+            <section class="outline-section">
+                <div class="section-head">
+                    <span class="section-label">Unassigned beats</span>
+                    <span class="section-count">@Book.Beats.Count</span>
+                    <button type="button" class="mini-btn" title="New unassigned beat"
+                            @onclick="() => Act(OutlineActionKind.AddBeat)">
+                        <Icon Name="plus" Size="13" />
+                    </button>
+                </div>
+                @if (Book.Beats.Count == 0)
+                {
+                    <p class="section-empty">Loose beats wait here until you place them in a scene.</p>
+                }
+                else
+                {
+                    @foreach (var entry in VisibleBeats(Book.Beats))
+                    {
+                        @BeatRow(entry.Beat, null, null, entry.Index, Book.Beats.Count)
+                    }
+                }
+            </section>
+
+            <section class="outline-section">
+                <div class="section-head">
+                    <span class="section-label">Unassigned scenes</span>
+                    <span class="section-count">@Book.Scenes.Count</span>
+                    <button type="button" class="mini-btn" title="New unassigned scene"
+                            @onclick="() => Act(OutlineActionKind.AddLooseScene)">
+                        <Icon Name="plus" Size="13" />
+                    </button>
+                </div>
+                @if (Book.Scenes.Count == 0)
+                {
+                    <p class="section-empty">Beats can gather into a scene before it joins a chapter.</p>
+                }
+                else
+                {
+                    @foreach (var entry in VisibleScenes(Book.Scenes))
+                    {
+                        @SceneBlock(entry.Scene, null, entry.Index, Book.Scenes.Count)
+                    }
+                }
+            </section>
+
+            <section class="outline-section">
+                <div class="section-head">
+                    <span class="section-label">Chapters</span>
+                    <span class="section-count">@Book.Chapters.Count</span>
+                    <button type="button" class="mini-btn" title="New chapter"
+                            @onclick="() => Act(OutlineActionKind.AddChapter)">
+                        <Icon Name="plus" Size="13" />
+                    </button>
+                </div>
+                @if (Book.Chapters.Count == 0)
+                {
+                    <p class="section-empty">Finished scenes can be placed in a chapter.</p>
+                }
+                else
+                {
+                    @foreach (var entry in VisibleChapters())
+                    {
+                        var chapter = entry.Chapter;
+                        var chapterIndex = entry.Index;
+
+                        <section class="chapter-block @(IsChapterActive(chapter) ? "is-active" : "")">
+                            <div class="node-row chapter-row">
+                                <button type="button" class="caret" @onclick="() => ToggleChapter(chapter.Id)"
+                                        aria-label="@(IsCollapsed(chapter) ? "Expand chapter" : "Collapse chapter")"
+                                        aria-expanded="@(!IsCollapsed(chapter))">
+                                    <Icon Name="@(IsCollapsed(chapter) ? "chevron-right" : "chevron-down")" Size="14" />
+                                </button>
+                                <button type="button" class="node-title" title="@chapter.Summary"
+                                        @onclick="() => SelectFirstBeat(chapter)">
+                                    <span class="node-kicker">Chapter @(chapterIndex + 1)</span>
+                                    <span class="node-name">@TitleOr(chapter.Title, "Untitled chapter")</span>
+                                </button>
+                                <span class="node-count">@WritingStats.FormatWords(Outline.ChapterWords(chapter))</span>
+                                <div class="row-actions" @onclick:stopPropagation="true">
+                                    <button type="button" class="mini-btn" title="Add scene"
+                                            @onclick="() => Act(OutlineActionKind.AddScene, chapter.Id)">
+                                        <Icon Name="plus" Size="14" />
+                                    </button>
+                                    <button type="button" class="mini-btn" title="Edit chapter"
+                                            @onclick="() => Act(OutlineActionKind.EditChapter, chapter.Id)">
+                                        <Icon Name="pencil" Size="14" />
+                                    </button>
+                                    <button type="button" class="mini-btn" title="Move chapter up" disabled="@(chapterIndex == 0)"
+                                            @onclick="() => Act(OutlineActionKind.MoveChapter, chapter.Id, delta: -1)">
+                                        <Icon Name="up" Size="14" />
+                                    </button>
+                                    <button type="button" class="mini-btn" title="Move chapter down"
+                                            disabled="@(chapterIndex >= Book.Chapters.Count - 1)"
+                                            @onclick="() => Act(OutlineActionKind.MoveChapter, chapter.Id, delta: 1)">
+                                        <Icon Name="down" Size="14" />
+                                    </button>
+                                    <button type="button" class="mini-btn danger" title="Delete chapter"
+                                            @onclick="() => Act(OutlineActionKind.DeleteChapter, chapter.Id)">
+                                        <Icon Name="trash" Size="14" />
+                                    </button>
+                                </div>
+                            </div>
+
+                            @if (!IsCollapsed(chapter))
+                            {
+                                @foreach (var sceneEntry in VisibleScenes(chapter.Scenes))
+                                {
+                                    @SceneBlock(sceneEntry.Scene, chapter.Id, sceneEntry.Index, chapter.Scenes.Count)
+                                }
+
+                                @if (chapter.Scenes.Count == 0)
+                                {
+                                    <button type="button" class="add-scene-row" @onclick="() => Act(OutlineActionKind.AddScene, chapter.Id)">
+                                        <Icon Name="plus" Size="13" /> Add a scene
+                                    </button>
+                                }
+                            }
+                        </section>
+                    }
+                }
+            </section>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(_filter) && !AnyMatches())
+        {
+            <div class="outline-empty">
+                <p>No beats match “@_filter”.</p>
+                <button type="button" class="text-btn" @onclick="ClearFilter">Clear search</button>
+            </div>
+        }
+    </div>
+
+    <div class="outline-foot">
+        <span>@WrittenBeats of @TotalBeats beats written</span>
+        <button type="button" class="text-btn" @onclick="() => OnOpenBackups.InvokeAsync()">
+            <Icon Name="clock" Size="13" /> Backups
+        </button>
+    </div>
+</aside>
+
+@code {
+    [Parameter, EditorRequired] public Book Book { get; set; } = null!;
+    [Parameter] public Guid? SelectedBeatId { get; set; }
+    [Parameter] public EventCallback<OutlineAction> OnAction { get; set; }
+    [Parameter] public EventCallback OnOpenBackups { get; set; }
+
+    private readonly HashSet<Guid> _collapsed = [];
+    private string _filter = "";
+
+    private int TotalWords => Outline.BookWords(Book);
+    private int WrittenBeats => Outline.WrittenBeats(Book);
+    private int TotalBeats => Outline.TotalBeats(Book);
+    private bool IsEmpty => Book.Beats.Count == 0 && Book.Scenes.Count == 0 && Book.Chapters.Count == 0;
+
+    private double GoalPercent
+    {
+        get
+        {
+            if (Book.WordGoal <= 0)
+            {
+                return 0;
+            }
+
+            return Math.Clamp(TotalWords * 100d / Book.WordGoal, 0, 100);
+        }
+    }
+
+    private void OnFilterInput(ChangeEventArgs args)
+    {
+        _filter = args.Value?.ToString() ?? "";
+    }
+
+    private void ClearFilter() => _filter = "";
+
+    private void ToggleChapter(Guid chapterId)
+    {
+        if (!_collapsed.Remove(chapterId))
+        {
+            _collapsed.Add(chapterId);
+        }
+    }
+
+    private bool IsCollapsed(Chapter chapter) => string.IsNullOrWhiteSpace(_filter) && _collapsed.Contains(chapter.Id);
+
+    private bool Matches(Beat beat)
+    {
+        if (string.IsNullOrWhiteSpace(_filter))
+        {
+            return true;
+        }
+
+        var filter = _filter.Trim();
+        return Contains(beat.Title, filter) ||
+               Contains(beat.Brief, filter) ||
+               Contains(beat.Content, filter);
+    }
+
+    private bool SceneVisible(Scene scene) =>
+        string.IsNullOrWhiteSpace(_filter) || scene.Beats.Any(Matches);
+
+    private bool ChapterVisible(Chapter chapter) =>
+        string.IsNullOrWhiteSpace(_filter) || chapter.Scenes.Any(SceneVisible);
+
+    private bool AnyMatches() =>
+        Book.Beats.Any(Matches) || Book.Scenes.Any(SceneVisible) || Book.Chapters.Any(ChapterVisible);
+
+    private bool IsChapterActive(Chapter chapter) =>
+        SelectedBeatId is { } id && Outline.Find(Book, id) is { } location && location.Chapter?.Id == chapter.Id;
+
+    private bool IsSceneActive(Scene scene) =>
+        SelectedBeatId is { } id && Outline.Find(Book, id) is { } location && location.Scene?.Id == scene.Id;
+
+    private IEnumerable<(Beat Beat, int Index)> VisibleBeats(IList<Beat> beats)
+    {
+        for (var i = 0; i < beats.Count; i++)
+        {
+            if (Matches(beats[i]))
+            {
+                yield return (beats[i], i);
+            }
+        }
+    }
+
+    private IEnumerable<(Scene Scene, int Index)> VisibleScenes(IList<Scene> scenes)
+    {
+        for (var i = 0; i < scenes.Count; i++)
+        {
+            if (SceneVisible(scenes[i]))
+            {
+                yield return (scenes[i], i);
+            }
+        }
+    }
+
+    private IEnumerable<(Chapter Chapter, int Index)> VisibleChapters()
+    {
+        for (var i = 0; i < Book.Chapters.Count; i++)
+        {
+            if (ChapterVisible(Book.Chapters[i]))
+            {
+                yield return (Book.Chapters[i], i);
+            }
+        }
+    }
+
+    private void SelectFirstBeat(Chapter chapter)
+    {
+        var beat = chapter.Scenes.SelectMany(s => s.Beats).FirstOrDefault();
+        if (beat is not null)
+        {
+            Act(OutlineActionKind.SelectBeat, beatId: beat.Id);
+        }
+    }
+
+    private void SelectFirstBeat(Scene scene)
+    {
+        var beat = scene.Beats.FirstOrDefault();
+        if (beat is not null)
+        {
+            Act(OutlineActionKind.SelectBeat, sceneId: scene.Id, beatId: beat.Id);
+        }
+        else
+        {
+            Act(OutlineActionKind.AddBeat, sceneId: scene.Id);
+        }
+    }
+
+    private Task Act(OutlineActionKind kind, Guid? chapterId = null, Guid? sceneId = null, Guid? beatId = null, int delta = 0) =>
+        OnAction.InvokeAsync(new OutlineAction(kind, chapterId, sceneId, beatId, delta));
+
+    private Task OnBeatKeyDown(KeyboardEventArgs args, Guid? chapterId, Guid? sceneId, Guid beatId)
+    {
+        if (args.Key is "Enter" or " ")
+        {
+            return Act(OutlineActionKind.SelectBeat, chapterId, sceneId, beatId);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private RenderFragment BeatRow(Beat beat, Guid? chapterId, Guid? sceneId, int index, int count) => @<div class="beat-row @(SelectedBeatId == beat.Id ? "selected" : "")"
+             role="button" tabindex="0"
+             aria-current="@(SelectedBeatId == beat.Id ? "true" : null)"
+             @onclick="() => Act(OutlineActionKind.SelectBeat, chapterId, sceneId, beat.Id)"
+             @onkeydown="args => OnBeatKeyDown(args, chapterId, sceneId, beat.Id)"
+             title="@(string.IsNullOrWhiteSpace(beat.Brief) ? null : beat.Brief)">
+        <span class="status-dot status-@beat.Status.ToString().ToLowerInvariant()" aria-hidden="true"></span>
+        <span class="beat-name">@TitleOr(beat.Title, "Untitled beat")</span>
+        <span class="node-count">@WritingStats.FormatWords(Outline.BeatWords(beat))</span>
+        <div class="row-actions" @onclick:stopPropagation="true">
+            <button type="button" class="mini-btn" title="Move beat up" disabled="@(index == 0)"
+                    @onclick="() => Act(OutlineActionKind.MoveBeat, chapterId, sceneId, beat.Id, -1)">
+                <Icon Name="up" Size="13" />
+            </button>
+            <button type="button" class="mini-btn" title="Move beat down" disabled="@(index >= count - 1)"
+                    @onclick="() => Act(OutlineActionKind.MoveBeat, chapterId, sceneId, beat.Id, 1)">
+                <Icon Name="down" Size="13" />
+            </button>
+            <button type="button" class="mini-btn" title="@(sceneId is null ? "Place in a scene" : "Move to another scene")"
+                    @onclick="() => Act(OutlineActionKind.ChooseBeatScene, chapterId, sceneId, beat.Id)">
+                <Icon Name="right" Size="13" />
+            </button>
+            <button type="button" class="mini-btn danger" title="Delete beat"
+                    @onclick="() => Act(OutlineActionKind.DeleteBeat, chapterId, sceneId, beat.Id)">
+                <Icon Name="trash" Size="13" />
+            </button>
+        </div>
+    </div>;
+
+    private RenderFragment SceneBlock(Scene scene, Guid? chapterId, int sceneIndex, int sceneCount) => @<div class="scene-block @(IsSceneActive(scene) ? "is-active" : "")">
+        <div class="node-row scene-row">
+            <span class="scene-mark" aria-hidden="true"></span>
+            <button type="button" class="node-title" title="@scene.Summary"
+                    @onclick="() => SelectFirstBeat(scene)">
+                <span class="node-name">@TitleOr(scene.Title, "Untitled scene")</span>
+                @if (!string.IsNullOrWhiteSpace(scene.Pov))
+                {
+                    <span class="node-pov">@scene.Pov</span>
+                }
+            </button>
+            <span class="node-count">@WritingStats.FormatWords(Outline.SceneWords(scene))</span>
+            <div class="row-actions" @onclick:stopPropagation="true">
+                <button type="button" class="mini-btn" title="Add beat"
+                        @onclick="() => Act(OutlineActionKind.AddBeat, chapterId, scene.Id)">
+                    <Icon Name="plus" Size="14" />
+                </button>
+                <button type="button" class="mini-btn" title="Edit scene"
+                        @onclick="() => Act(OutlineActionKind.EditScene, chapterId, scene.Id)">
+                    <Icon Name="pencil" Size="14" />
+                </button>
+                <button type="button" class="mini-btn" title="Move scene up" disabled="@(sceneIndex == 0)"
+                        @onclick="() => Act(OutlineActionKind.MoveScene, chapterId, scene.Id, delta: -1)">
+                    <Icon Name="up" Size="14" />
+                </button>
+                <button type="button" class="mini-btn" title="Move scene down" disabled="@(sceneIndex >= sceneCount - 1)"
+                        @onclick="() => Act(OutlineActionKind.MoveScene, chapterId, scene.Id, delta: 1)">
+                    <Icon Name="down" Size="14" />
+                </button>
+                <button type="button" class="mini-btn" title="@(chapterId is null ? "Place in a chapter" : "Move to another chapter")"
+                        @onclick="() => Act(OutlineActionKind.ChooseSceneChapter, chapterId, scene.Id)">
+                    <Icon Name="right" Size="14" />
+                </button>
+                <button type="button" class="mini-btn danger" title="Delete scene"
+                        @onclick="() => Act(OutlineActionKind.DeleteScene, chapterId, scene.Id)">
+                    <Icon Name="trash" Size="14" />
+                </button>
+            </div>
+        </div>
+
+        @foreach (var entry in VisibleBeats(scene.Beats))
+        {
+            @BeatRow(entry.Beat, chapterId, scene.Id, entry.Index, scene.Beats.Count)
+        }
+
+        @if (scene.Beats.Count == 0)
+        {
+            <button type="button" class="add-beat-row" @onclick="() => Act(OutlineActionKind.AddBeat, chapterId, scene.Id)">
+                <Icon Name="plus" Size="13" /> Add the first beat
+            </button>
+        }
+    </div>;
+
+    private static bool Contains(string? value, string filter) =>
+        !string.IsNullOrEmpty(value) && value.Contains(filter, StringComparison.OrdinalIgnoreCase);
+
+    private static string TitleOr(string? value, string fallback) =>
+        string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+}
